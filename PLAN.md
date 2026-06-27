@@ -44,8 +44,20 @@ built as ordinary DOM/framework siblings to the canvas — exactly like the HUD 
 `examples/dggs-globe.html`, which is ~30 lines of plain DOM calling public
 methods and required **zero** library involvement.
 
+**Primitives & styling (the data model).** The core renders GeoJSON-shaped
+primitives — **points, lines, polygons** (+ Multi forms) — and nothing more
+specific. The unit of identity and style is the **feature** (one point/line/
+polygon), *never* the "cell". DGGS cells, coastlines, country borders, and
+choropleths are all *applications* — layers of these primitives with data-driven
+style, built on top. Styling and identity ride one shared substrate: a
+`featureId` attribute + a per-feature style buffer the shader reads by id. So
+restyle, per-feature opacity, and hover picking are the *same* mechanism across
+all three primitive types, and restyle touches the style buffer (`nFeatures`
+records), not geometry. See §6 (M2) and §7.
+
 **The library owns** (all coupled to render/projection math; "solve it once"):
-- Layers: `polygons()`, `lines()`, `layer.update()`, `layer.remove()`.
+- Layers of primitives: `points()`, `lines()`, `polygons()`, plus
+  `layer.update({style})` / `layer.remove()`. Style is per-feature.
 - Camera: `lookAt()`, get/set `rotation`/`zoom`, arcball drag + wheel zoom.
 - Interaction *results* as events: `on('hover'|'click', (i, {lng,lat}) => …)`,
   `on('viewchange', …)`.
@@ -81,6 +93,18 @@ Render order each frame (only when dirty): opaque depth sphere (radius 0.998) �
 polygon fills (radius 1.0, depth-tested → back hemisphere occluded) → [strokes,
 later]. Geometry is built once on `polygons()`; rotation is just a uniform.
 
+**Core substrates (shared, primitive-agnostic — build once, reuse everywhere).**
+Two things live *below* the primitive renderers and are consumed identically by
+points/lines/polygons; both are coordinate-free, so they're seam/pole-immune by
+construction:
+- **Per-feature style + identity** — `featureId` attribute + per-feature style
+  buffer read in-shader by id. Serves restyle, opacity, and picking. (§7)
+- **Geodesic path** — slerp-in-xyz densification of a sequence of unit-sphere
+  anchors into a great-circle polyline. Consumed by polygon-fill *boundaries*,
+  strokes (M3), and `lines()` (M5) alike. Densification is a *policy* (default:
+  static, sized for worst-case zoom) behind the densifier's interface; the
+  *mechanism* (slerp) is fixed. CPU-at-upload now; GPU/dynamic deferred. (§7)
+
 ## 5. Public API
 
 Current:
@@ -94,21 +118,31 @@ Planned additions (the composition surface + features below).
 
 ## 6. Roadmap
 
+The three GeoJSON primitives (§3) land across milestones: **polygons** (M1, fills;
+strokes M3), **lines** (M5), **points** (M6). All share the per-feature style
+substrate from M2.
+
 - [x] **M1 — spike:** fills + depth sphere + arcball + zoom; pole/antimeridian
-      proven on ivea7h r5/r6 at 60 FPS.
+      proven on ivea7h r5/r6 at 60 FPS. *(polygons primitive — fills)*
 - [ ] **M2 — core API + composition surface**
+  - [ ] **per-feature style substrate** — `featureId` attribute + per-feature
+        style buffer (data texture/UBO) read in-shader by id. The foundation the
+        next three items + M4 picking all share; restyle uploads `nFeatures`
+        records and never re-tessellates. (decision: §7)
   - [ ] `project(lng,lat)→{x,y,visible}` / `unproject(x,y)→{lng,lat}`
   - [ ] event emitter: `on('hover'|'click'|'viewchange', …)`
-  - [ ] `layer.update({fill})` — recolor without re-tessellating
-  - [ ] per-cell opacity; document `xyz` vs `lnglat` input
+  - [ ] `layer.update({style})` — restyle without re-tessellating (via the substrate)
+  - [ ] per-feature opacity; document `xyz` vs `lnglat` input
   - [ ] large-cell fill subdivision (see §8) so coarse cells don't sink below the
         depth sphere
-- [ ] **M3 — thick AA strokes** (cell outlines): screen-space line quads, variable
-      width, edge-alpha AA; great-circle densification for long edges
+- [ ] **M3 — thick AA strokes** (polygon outlines / any open or closed path):
+      screen-space line quads, variable width, edge-alpha AA. Consumes the
+      geodesic-path substrate (§4/§7) for arc densification; shared by `lines()` (M5).
 - [ ] **M4 — GPU hover picking:** offscreen id-color FBO + readPixels → feature
       index; wires into `on('hover'/'click')`
 - [ ] **M5 — reference-geometry helpers + polish**
-  - [ ] `lines()` primitive (slerp-densified great-circle segments; thick AA reuses M3)
+  - [ ] `lines()` primitive over open polylines (geodesic-path substrate §4/§7 for
+        great-circle arcs; thick AA reuses M3)
   - [ ] bundled low-res assets: **coastlines** and **country borders** (Natural
         Earth admin-0), vendored as compact binary (same `pos/idx` layout as the
         cell data) so they load instantly with no GeoJSON parse
@@ -117,6 +151,12 @@ Planned additions (the composition surface + features below).
   - [ ] note: antimeridian-spanning countries (Russia, Fiji, US/Alaska) render
         correctly with no unwrap — that's the whole point of drawing in 3D
   - [ ] more examples, README, `dist/` esbuild bundle, basic geometry unit tests
+- [ ] **M6 — `points()` primitive:** the third GeoJSON primitive. Instanced
+      screen-space quads/sprites at each feature's unit-sphere position; depth-
+      tested against the background sphere so back-hemisphere points are hidden
+      (and `project().visible` agrees). Per-feature radius/color/opacity via the
+      M2 style substrate; reuses M4 picking by `featureId`. Enables pin/marker/
+      bubble-map apps (e.g. cell centroids, city dots) on top.
 - [ ] **Later:** time-normalized momentum (opt-in), concave polygon fills
       (spherical ear-clip), perspective/deep zoom, reuse the 3D core for 2D map
       projections, publish to npm
@@ -131,6 +171,37 @@ Planned additions (the composition surface + features below).
   reference outlines (**coastlines + country borders**). **Orthographic only** for v1.
 - Fill triangulation = **topology fan** (convex cells only); concave fills later.
 - **Minimal rendering core; UI composed on top** (§3).
+- **Per-feature styling & identity substrate.** Style/identity is keyed by
+  **feature** (point/line/polygon), not by "cell". One mechanism — a `featureId`
+  vertex attribute + a per-feature style buffer the shader samples by id — serves
+  restyle, per-feature opacity, and hover picking, identically across all three
+  primitive types. *Why:* baking style per-vertex makes restyle an `nVerts`-sized
+  geometry re-upload (~28 MB at ivea7h r6) and gives picking no id to read; the
+  substrate makes restyle an `nFeatures` upload (~6× smaller, zero geometry
+  touched) and M4 picking nearly falls out of it. *Consequence:* the core data
+  model is GeoJSON-shaped primitives; cells/coastlines/borders are apps on top,
+  not core concepts. Decided before M2 — retrofitting it later means rewriting the
+  vertex format + both shaders + the upload path.
+- **Geodesic-path substrate.** A line — standalone, or a polygon-boundary edge —
+  is *always* a great-circle arc, represented by **slerp-in-xyz densification** of
+  its unit-sphere anchors. One densifier feeds three consumers: polygon-fill
+  boundaries, strokes (M3), and `lines()` (M5). *Why coordinate-free:* slerping
+  unit vectors never touches lng/lat, so arcs are antimeridian/pole-immune by
+  construction — same reason the topology fan is. Interpolating in lng/lat (the
+  usual approach) is exactly what breaks at the seam; we never do it.
+  - *Mechanism vs. policy:* slerp is the fixed mechanism; "how many segments" is a
+    pluggable policy. **Default: static, angle-based**, sized so worst-case-zoom
+    sag is sub-pixel — cheap (only long edges subdivide; ~1° DGGS edges get
+    ~nothing), view-independent, preserves "build geometry once." **View-adaptive/
+    dynamic LOD is deferred** (breaks build-once, needs hysteresis; profile first).
+  - *CPU-at-upload, not GPU-at-draw (for now):* CPU densification yields real
+    vertices that fills *and* strokes share; GPU vertex-shader slerp (segments as a
+    uniform) would make dynamic LOD trivial and save memory but splits the fill and
+    stroke paths. Keep the seam so a GPU/dynamic policy can replace the stroke
+    path later without changing callers.
+  - *Distinct from interior subdivision:* densifying a ring fixes the fill
+    *silhouette*; it does **not** fix interior fan chords sinking below the depth
+    sphere (§8). Two consumers of the same util, two different problems.
 
 ## 8. Known issues / gotchas
 
