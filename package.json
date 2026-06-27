@@ -1,0 +1,14 @@
+{
+  "name": "ajglobe",
+  "version": "0.0.1",
+  "description": "Correct, fast orthographic globe rendering for polygons and lines — no antimeridian or pole hacks, by construction.",
+  "type": "module",
+  "main": "src/orb.js",
+  "exports": { ".": "./src/orb.js" },
+  "files": ["src", "README.md", "LICENSE"],
+  "scripts": {
+    "serve": "python3 -m http.server 8080",
+    "build": "esbuild src/orb.js --bundle --format=esm --minify --outfile=dist/ajglobe.min.js"
+  },
+  "license": "MIT"
+}

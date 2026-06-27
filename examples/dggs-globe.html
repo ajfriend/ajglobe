@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ajglobe — ivea7h every cell</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0e13;overflow:hidden;
+    font:13px ui-monospace,Menlo,monospace;color:#9aa7b4;}
+  #c{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;touch-action:none;}
+  #c:active{cursor:grabbing;}
+  #hud{position:absolute;top:14px;left:16px;z-index:10;background:#0b0e13cc;
+    border:1px solid #2a323d;border-radius:8px;padding:10px 13px;line-height:1.7;}
+  #hud b{color:#e6edf3;}
+  button{background:#1c232d;color:#9aa7b4;border:1px solid #2a323d;border-radius:6px;
+    padding:3px 9px;cursor:pointer;font:inherit;margin-right:4px;}
+  button.on{background:#58a6ff;color:#06121f;border-color:transparent;}
+  #status{display:block;margin-top:7px;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <b>ajglobe</b> · ivea7h every cell
+  <span style="margin-left:6px">
+    <button id="r5" class="on">r5</button><button id="r6">r6</button>
+  </span>
+  <span style="margin-left:6px">
+    <button id="np">north pole</button><button id="am">antimeridian</button>
+  </span>
+  <span id="status">loading…</span>
+</div>
+
+<script type="module">
+import { Orb } from '../src/orb.js';
+
+// viridis via 8 control stops (no d3 dependency)
+const STOPS = [[68,1,84],[71,44,122],[59,81,139],[44,113,142],
+               [33,144,141],[39,173,129],[92,200,99],[253,231,37]];
+function viridis(t){
+  t = Math.max(0, Math.min(1, t)) * (STOPS.length - 1);
+  const i = Math.min(STOPS.length - 2, t | 0), f = t - i, a = STOPS[i], b = STOPS[i+1];
+  return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f, 255];
+}
+function bisect(arr, x){ let lo=0, hi=arr.length; while(lo<hi){const m=(lo+hi)>>1; if(arr[m]<x)lo=m+1; else hi=m;} return lo; }
+
+const orb = new Orb(document.getElementById('c'), { background:'#0b0e13', sphere:'#11151c' });
+window.orb = orb;   // handy for the console / benchmarking
+orb.lookAt(180, 25);
+
+const cache = new Map();
+async function bin(name, Ctor){ const b = await fetch(`data/${name}`).then(r=>{if(!r.ok)throw new Error(name+' '+r.status);return r.arrayBuffer();}); return new Ctor(b); }
+
+let layer = null;
+async function show(res){
+  document.getElementById('status').textContent = `loading r${res}…`;
+  if(!cache.has(res)){
+    const [pos, starts, ar] = await Promise.all([
+      bin(`ivea7h_r${res}_pos.f32`, Float32Array),
+      bin(`ivea7h_r${res}_idx.u32`, Uint32Array),
+      bin(`ivea7h_r${res}_ar.f32`, Float32Array),
+    ]);
+    const sorted = Float64Array.from([...ar].filter(Number.isFinite)).sort();
+    cache.set(res, { pos, starts, ar, sorted });
+  }
+  const { pos, starts, ar, sorted } = cache.get(res);
+  const t0 = performance.now();
+  if(layer) layer.remove();
+  layer = orb.polygons({
+    lnglat: pos, starts,
+    fill: (i) => Number.isFinite(ar[i]) ? viridis(bisect(sorted, ar[i])/(sorted.length-1)) : [68,68,68,255],
+  });
+  const buildMs = Math.round(performance.now() - t0);
+  const s = orb.stats;
+  document.getElementById('status').innerHTML =
+    `<b>${s.cells.toLocaleString()}</b> cells · <b>${s.verts.toLocaleString()}</b> verts · `
+    + `built in <b>${buildMs} ms</b> · drag to rotate · scroll to zoom`;
+}
+
+for(const r of [5,6]) document.getElementById('r'+r).onclick = (e)=>{
+  document.querySelectorAll('#r5,#r6').forEach(b=>b.classList.toggle('on', b===e.target));
+  show(r);
+};
+document.getElementById('np').onclick = ()=>orb.lookAt(0,90);
+document.getElementById('am').onclick = ()=>orb.lookAt(180,0);
+show(5);
+</script>
+</body>
+</html>
