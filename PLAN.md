@@ -15,9 +15,10 @@ singular places. A polygon on a sphere has no seams.
 
 **The thesis (the one idea everything rests on):** never go to 2D.
 - A vertex is a point on the unit sphere (`lng/lat → xyz`, once).
-- A filled cell is triangulated by ring **topology** — a fan over vertex indices
-  (`s, j, j+1`), which is coordinate-free — so it is immune to the seam, and a
-  pole *inside* a convex cell is covered like any other interior point.
+- A filled polygon (a DGGS cell, a country, anything) is triangulated by ring
+  **topology** — a fan over vertex indices (`s, j, j+1`), which is coordinate-free
+  — so it is immune to the seam, and a pole *inside* a convex ring is covered like
+  any other interior point.
 - The back hemisphere is hidden by an opaque depth sphere (also gives a solid
   globe + kills see-through gaps).
 
@@ -49,11 +50,10 @@ primitives — **points, lines, polygons** (+ Multi forms) — and nothing more
 specific. The unit of identity and style is the **feature** (one point/line/
 polygon), *never* the "cell". DGGS cells, coastlines, country borders, and
 choropleths are all *applications* — layers of these primitives with data-driven
-style, built on top. Styling and identity ride one shared substrate: a
-`featureId` attribute + a per-feature style buffer the shader reads by id. So
-restyle, per-feature opacity, and hover picking are the *same* mechanism across
-all three primitive types, and restyle touches the style buffer (`nFeatures`
-records), not geometry. See §6 (M2) and §7.
+style, built on top. Styling and identity ride one shared, per-feature substrate,
+so restyle, per-feature opacity, and hover picking are the *same* mechanism for
+every primitive type — and restyle never touches geometry. (Mechanism and the
+cost argument: §4 / §7.)
 
 **The library owns** (all coupled to render/projection math; "solve it once"):
 - Layers of primitives: `points()`, `lines()`, `polygons()`, plus
@@ -96,14 +96,14 @@ later]. Geometry is built once on `polygons()`; rotation is just a uniform.
 **Core substrates (shared, primitive-agnostic — build once, reuse everywhere).**
 Two things live *below* the primitive renderers and are consumed identically by
 points/lines/polygons; both are coordinate-free, so they're seam/pole-immune by
-construction:
+construction. Neither exists in `src/` yet — they land with M2 (module layout
+TBD); the design rationale and trade-offs are the §7 decisions:
 - **Per-feature style + identity** — `featureId` attribute + per-feature style
   buffer read in-shader by id. Serves restyle, opacity, and picking. (§7)
-- **Geodesic path** — slerp-in-xyz densification of a sequence of unit-sphere
-  anchors into a great-circle polyline. Consumed by polygon-fill *boundaries*,
-  strokes (M3), and `lines()` (M5) alike. Densification is a *policy* (default:
-  static, sized for worst-case zoom) behind the densifier's interface; the
-  *mechanism* (slerp) is fixed. CPU-at-upload now; GPU/dynamic deferred. (§7)
+- **Geodesic path** — slerp-in-xyz densification of unit-sphere anchors into a
+  great-circle polyline; consumed by polygon-fill *boundaries*, strokes (M3), and
+  `lines()` (M5) alike. Slerp is the fixed mechanism; segment count is a pluggable
+  policy. (§7)
 
 ## 5. Public API
 
@@ -126,9 +126,9 @@ substrate from M2.
       proven on ivea7h r5/r6 at 60 FPS. *(polygons primitive — fills)*
 - [ ] **M2 — core API + composition surface**
   - [ ] **per-feature style substrate** — `featureId` attribute + per-feature
-        style buffer (data texture/UBO) read in-shader by id. The foundation the
-        next three items + M4 picking all share; restyle uploads `nFeatures`
-        records and never re-tessellates. (decision: §7)
+        style buffer read in-shader by id. The foundation the next three items +
+        M4 picking all share; restyle uploads `nFeatures` records and never
+        re-tessellates. (decision: §7)
   - [ ] `project(lng,lat)→{x,y,visible}` / `unproject(x,y)→{lng,lat}`
   - [ ] event emitter: `on('hover'|'click'|'viewchange', …)`
   - [ ] `layer.update({style})` — restyle without re-tessellating (via the substrate)
@@ -151,8 +151,8 @@ substrate from M2.
   - [ ] note: antimeridian-spanning countries (Russia, Fiji, US/Alaska) render
         correctly with no unwrap — that's the whole point of drawing in 3D
   - [ ] more examples, README, `dist/` esbuild bundle, basic geometry unit tests
-- [ ] **M6 — `points()` primitive:** the third GeoJSON primitive. Instanced
-      screen-space quads/sprites at each feature's unit-sphere position; depth-
+- [ ] **M6 — `points()` primitive:** the third GeoJSON primitive. Screen-space
+      quads/sprites at each feature's unit-sphere position; depth-
       tested against the background sphere so back-hemisphere points are hidden
       (and `project().visible` agrees). Per-feature radius/color/opacity via the
       M2 style substrate; reuses M4 picking by `featureId`. Enables pin/marker/
@@ -169,7 +169,8 @@ substrate from M2.
 - Math vendored (no gl-matrix).
 - v1 must-haves: fills, thick AA strokes, solid background sphere, hover picking,
   reference outlines (**coastlines + country borders**). **Orthographic only** for v1.
-- Fill triangulation = **topology fan** (convex cells only); concave fills later.
+- Fill triangulation = **topology fan** (convex rings only — true of DGGS cells,
+  country borders, etc.); concave fills later.
 - **Minimal rendering core; UI composed on top** (§3).
 - **Per-feature styling & identity substrate.** Style/identity is keyed by
   **feature** (point/line/polygon), not by "cell". One mechanism — a `featureId`
