@@ -20,6 +20,9 @@ Scope is deliberately small (no basemaps, tiles, or labels): draw lots of
 polygons (e.g. DGGS cells) with fills + outlines + color/opacity, draw reference
 lines (coastlines), and drag/zoom — done right, once.
 
+> Working on this repo? See [PLAN.md](PLAN.md) for status, roadmap, decisions, and
+> gotchas — it's the source of truth.
+
 ## Status
 
 **Milestone 1 (spike):** filled convex polygons + background sphere + arcball drag
