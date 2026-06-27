@@ -107,9 +107,16 @@ Planned additions (the composition surface + features below).
       width, edge-alpha AA; great-circle densification for long edges
 - [ ] **M4 — GPU hover picking:** offscreen id-color FBO + readPixels → feature
       index; wires into `on('hover'/'click')`
-- [ ] **M5 — coastline helper + polish:** bundled low-res coastline asset,
-      `coastlines()` helper, more examples, README, `dist/` esbuild bundle, basic
-      geometry unit tests
+- [ ] **M5 — reference-geometry helpers + polish**
+  - [ ] `lines()` primitive (slerp-densified great-circle segments; thick AA reuses M3)
+  - [ ] bundled low-res assets: **coastlines** and **country borders** (Natural
+        Earth admin-0), vendored as compact binary (same `pos/idx` layout as the
+        cell data) so they load instantly with no GeoJSON parse
+  - [ ] helpers: `coastlines(opts)` and `borders(opts)` (color/width/opacity) —
+        thin wrappers over `lines()` so country outlines are one call
+  - [ ] note: antimeridian-spanning countries (Russia, Fiji, US/Alaska) render
+        correctly with no unwrap — that's the whole point of drawing in 3D
+  - [ ] more examples, README, `dist/` esbuild bundle, basic geometry unit tests
 - [ ] **Later:** time-normalized momentum (opt-in), concave polygon fills
       (spherical ear-clip), perspective/deep zoom, reuse the 3D core for 2D map
       projections, publish to npm
@@ -121,7 +128,7 @@ Planned additions (the composition surface + features below).
   only to emit `dist/` later. JS + JSDoc (no TS toolchain).
 - Math vendored (no gl-matrix).
 - v1 must-haves: fills, thick AA strokes, solid background sphere, hover picking,
-  continent outlines. **Orthographic only** for v1.
+  reference outlines (**coastlines + country borders**). **Orthographic only** for v1.
 - Fill triangulation = **topology fan** (convex cells only); concave fills later.
 - **Minimal rendering core; UI composed on top** (§3).
 
@@ -163,5 +170,7 @@ Planned additions (the composition surface + features below).
 
 - Stroke styling model: per-feature width/color vs per-layer only for v1?
 - Picking at 1M+ cells: id-color FBO precision (24-bit ok) and read-back cadence.
-- Coastline asset: which resolution (Natural Earth 110m?) and where to vendor it.
+- Reference assets: which Natural Earth resolution (110m default, 50m option?) for
+  coastlines AND admin-0 country borders, and the build step to convert them to the
+  vendored binary `pos/idx` layout.
 - Eventual npm package name / scope.
