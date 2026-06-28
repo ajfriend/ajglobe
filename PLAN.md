@@ -184,6 +184,18 @@ substrate from M2.
 - **WebGL2**, **zero runtime deps**, vanilla ESM, no dev build step; `esbuild`
   only to emit `dist/` later. JS + JSDoc (no TS toolchain).
 - Math vendored (no gl-matrix).
+- **General GPU engine (luma.gl / three.js)? — deferred to a WebGPU decision, not
+  before.** These are general 3D engines (deck.gl is built on luma.gl), so the
+  question is "engine vs raw WebGL2", independent of the map stuff we reject. For
+  v1 it's a net loss: the engine would dwarf a few-hundred-line core in bundle
+  size, force a build step (killing load-as-plain-ESM), and add scene-graph/per-
+  object friction exactly at the 1M-vert hot path we need to own — while only
+  replacing plumbing we've already minimized (`_attrib`/`program`), never the
+  bespoke parts (topology fan, depth sphere, stroke quads, slerp). The real
+  trigger to reconsider is **WebGPU**: if we ever want a WebGPU backend, a
+  backend-abstraction engine (luma.gl v9) earns its weight there. Lighter middle
+  ground if GL plumbing gets gnarly first (M4 FBO picking, M6 instancing): **twgl
+  or regl** (tiny, ESM, no build step) — not a full engine.
 - v1 must-haves: fills, thick AA strokes, solid background sphere, hover picking,
   reference outlines (**coastlines + country borders**). **Orthographic only** for v1.
 - Fill triangulation = **topology fan** (convex rings only — true of DGGS cells,
