@@ -10,7 +10,7 @@
 // Milestone 1: filled convex polygons + background sphere + arcball/zoom.
 // (Thick strokes, picking, coastlines, lng/lat input helpers come next.)
 
-import { lnglatToVec3 } from './glmath.js';
+import { lnglatToVec3Into } from './glmath.js';
 import { Camera } from './camera.js';
 
 function compile(gl, type, src) {
@@ -99,6 +99,12 @@ export class Orb {
 
     this.fillProg = program(gl, FILL_VS, FILL_FS);
     this.sphereProg = program(gl, SPHERE_VS, SPHERE_FS);
+    // Uniform locations are fixed after link — resolve once, not per frame.
+    this.fillU = { mvp: gl.getUniformLocation(this.fillProg, 'u_mvp') };
+    this.sphereU = {
+      mvp: gl.getUniformLocation(this.sphereProg, 'u_mvp'),
+      color: gl.getUniformLocation(this.sphereProg, 'u_color'),
+    };
     this._buildSphere();
 
     this.layers = [];
@@ -115,6 +121,27 @@ export class Orb {
     requestAnimationFrame(loop);
   }
 
+  // Create an ARRAY_BUFFER and wire it to a vertex attribute on the bound VAO.
+  _attrib(prog, name, data, size, type, normalized = false) {
+    const gl = this.gl;
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, name);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribPointer(loc, size, type ?? gl.FLOAT, normalized, 0, 0);
+    return buf;
+  }
+
+  // Create an ELEMENT_ARRAY_BUFFER (indices) on the bound VAO.
+  _elements(data) {
+    const gl = this.gl;
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    return buf;
+  }
+
   _buildSphere() {
     const gl = this.gl;
     // Slightly inside the unit sphere so cells (at r=1) always sit in front of it
@@ -123,15 +150,8 @@ export class Orb {
     this.sphereCount = m.idx.length;
     this.sphereVAO = gl.createVertexArray();
     gl.bindVertexArray(this.sphereVAO);
-    const pb = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, pb);
-    gl.bufferData(gl.ARRAY_BUFFER, m.pos, gl.STATIC_DRAW);
-    const loc = gl.getAttribLocation(this.sphereProg, 'a_pos');
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
-    const ib = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, m.idx, gl.STATIC_DRAW);
+    this._attrib(this.sphereProg, 'a_pos', m.pos, 3);
+    this._elements(m.idx);
     gl.bindVertexArray(null);
   }
 
@@ -151,8 +171,7 @@ export class Orb {
     } else {
       pos = new Float32Array(nVerts * 3);
       for (let v = 0; v < nVerts; v++) {
-        const p = lnglatToVec3(lnglat[v * 2], lnglat[v * 2 + 1]);
-        pos[v * 3] = p[0]; pos[v * 3 + 1] = p[1]; pos[v * 3 + 2] = p[2];
+        lnglatToVec3Into(pos, v * 3, lnglat[v * 2], lnglat[v * 2 + 1]);
       }
     }
 
@@ -183,21 +202,9 @@ export class Orb {
 
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
-    const pb = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, pb);
-    gl.bufferData(gl.ARRAY_BUFFER, pos, gl.STATIC_DRAW);
-    let loc = gl.getAttribLocation(this.fillProg, 'a_pos');
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
-    const cb = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, cb);
-    gl.bufferData(gl.ARRAY_BUFFER, colors, gl.STATIC_DRAW);
-    loc = gl.getAttribLocation(this.fillProg, 'a_color');
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, 4, gl.UNSIGNED_BYTE, true, 0, 0);
-    const ib = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
+    const pb = this._attrib(this.fillProg, 'a_pos', pos, 3);
+    const cb = this._attrib(this.fillProg, 'a_color', colors, 4, gl.UNSIGNED_BYTE, true);
+    const ib = this._elements(idx);
     gl.bindVertexArray(null);
 
     const layer = { vao, count: idx.length, nCells, nVerts, _buffers: [pb, cb, ib] };
@@ -230,8 +237,7 @@ export class Orb {
   }
 
   _frame() {
-    const animating = this.cam.tick();
-    if (!this._dirty && !animating) return;
+    if (!this._dirty) return;
     this._dirty = false;
     const gl = this.gl;
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -241,14 +247,14 @@ export class Orb {
 
     // 1) opaque background sphere (depth) -> hides the back hemisphere
     gl.useProgram(this.sphereProg);
-    gl.uniformMatrix4fv(gl.getUniformLocation(this.sphereProg, 'u_mvp'), false, mvp);
-    gl.uniform4f(gl.getUniformLocation(this.sphereProg, 'u_color'), ...this.sphereColor, 1);
+    gl.uniformMatrix4fv(this.sphereU.mvp, false, mvp);
+    gl.uniform4f(this.sphereU.color, ...this.sphereColor, 1);
     gl.bindVertexArray(this.sphereVAO);
     gl.drawElements(gl.TRIANGLES, this.sphereCount, gl.UNSIGNED_INT, 0);
 
     // 2) polygon fills (depth-tested against the sphere)
     gl.useProgram(this.fillProg);
-    gl.uniformMatrix4fv(gl.getUniformLocation(this.fillProg, 'u_mvp'), false, mvp);
+    gl.uniformMatrix4fv(this.fillU.mvp, false, mvp);
     for (const l of this.layers) {
       gl.bindVertexArray(l.vao);
       gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);

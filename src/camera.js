@@ -1,8 +1,8 @@
 // Orthographic globe camera: a quaternion orientation + a zoom (orthographic
-// half-extent). Arcball drag, wheel zoom, and release inertia. Emits a change
-// callback so the renderer only redraws when something moved.
+// half-extent). Arcball drag and wheel zoom. Emits a change callback so the
+// renderer only redraws when something moved.
 
-import { vec3, quat, mat4 } from './glmath.js';
+import { vec3, quat, mat4, lnglatToVec3 } from './glmath.js';
 
 export class Camera {
   constructor(canvas, onChange) {
@@ -10,16 +10,19 @@ export class Camera {
     this.onChange = onChange;
     this.q = quat.identity();      // model orientation
     this.zoom = 1;                 // 1 == globe just fits
-    this.spin = null;              // {axis, angle} inertia, in world frame
     this._drag = null;             // arcball drag state
     this._attach();
   }
+
+  // Orthographic half-height in world units: globe radius 1 + ~5% margin,
+  // divided by zoom. Shared by the arcball unproject (_ball) and the projection.
+  _halfExtent() { return 1.05 / this.zoom; }
 
   // Project a pixel to a point on the virtual arcball (radius = globe radius),
   // in the camera/world frame (z toward the viewer).
   _ball(px, py) {
     const r = this.canvas.getBoundingClientRect();
-    const s = 1.05 / this.zoom;                       // ortho half-height
+    const s = this._halfExtent();
     const aspect = r.width / r.height;
     const x = ((2 * px) / r.width - 1) * s * aspect;  // world units on the view plane
     const y = -((2 * py) / r.height - 1) * s;
@@ -31,10 +34,9 @@ export class Camera {
     const c = this.canvas;
     c.addEventListener('pointerdown', (e) => {
       c.setPointerCapture(e.pointerId);
-      this.spin = null;
       // Track the previous ball vector so each move is an INCREMENTAL rotation
-      // (not cumulative-from-start); inertia then coasts at the per-move rate.
-      this._drag = { v: this._ball(e.offsetX, e.offsetY), last: null, lastT: e.timeStamp };
+      // (not cumulative-from-start).
+      this._drag = { v: this._ball(e.offsetX, e.offsetY) };
     });
     c.addEventListener('pointermove', (e) => {
       if (!this._drag) return;
@@ -42,8 +44,6 @@ export class Camera {
       const delta = quat.fromUnitVectors(this._drag.v, v1);   // incremental step
       this.q = quat.normalize(quat.multiply(delta, this.q));
       this._drag.v = v1;                   // advance reference -> per-move deltas
-      this._drag.last = delta;
-      this._drag.lastT = e.timeStamp;
       this.onChange();
     });
     // Direct drag: the globe stops where you release it. (A time-normalized
@@ -59,29 +59,16 @@ export class Camera {
     }, { passive: false });
   }
 
-  // Advance inertia one frame; returns true if still animating.
-  tick() {
-    if (!this.spin) return false;
-    const d = quat.fromAxisAngle(this.spin.axis, this.spin.angle);
-    this.q = quat.normalize(quat.multiply(d, this.q));
-    this.spin.angle *= 0.92;
-    if (Math.abs(this.spin.angle) < 0.0008) { this.spin = null; return false; }
-    return true;
-  }
-
   // Point the camera at a given lng/lat (animation-free; sets orientation).
   lookAt(lngDeg, latDeg) {
     // Rotate so that (lng,lat) lands at the sub-viewer point (+z).
-    const lng = (lngDeg * Math.PI) / 180, lat = (latDeg * Math.PI) / 180;
-    const c = Math.cos(lat);
-    const target = [c * Math.cos(lng), c * Math.sin(lng), Math.sin(lat)];
+    const target = lnglatToVec3(lngDeg, latDeg);
     this.q = quat.fromUnitVectors(target, [0, 0, 1]);
-    this.spin = null;
     this.onChange();
   }
 
   mvp(aspect) {
-    const s = 1.05 / this.zoom;
+    const s = this._halfExtent();
     const proj = mat4.ortho(-s * aspect, s * aspect, -s, s, 0.1, 10);
     const view = mat4.lookAt([0, 0, 3], [0, 0, 0], [0, 1, 0]);
     const model = mat4.fromQuat(this.q);

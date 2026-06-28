@@ -16,13 +16,23 @@ export const vec3 = {
   },
 };
 
-// (lng, lat) degrees -> unit vector. z = north pole. No seams: this is the
-// whole point — every vertex becomes a point on the sphere, antimeridian and
-// poles included, with no special handling anywhere downstream.
-export function lnglatToVec3(lngDeg, latDeg) {
+// (lng, lat) degrees -> unit vector, written into out[off..off+2]. z = north
+// pole. No seams: this is the whole point — every vertex becomes a point on the
+// sphere, antimeridian and poles included, with no special handling downstream.
+// The in-place form is allocation-free for hot per-vertex loops (millions of
+// verts); lnglatToVec3 wraps it for one-off callers.
+export function lnglatToVec3Into(out, off, lngDeg, latDeg) {
   const lng = (lngDeg * Math.PI) / 180, lat = (latDeg * Math.PI) / 180;
   const c = Math.cos(lat);
-  return [c * Math.cos(lng), c * Math.sin(lng), Math.sin(lat)];
+  out[off] = c * Math.cos(lng);
+  out[off + 1] = c * Math.sin(lng);
+  out[off + 2] = Math.sin(lat);
+}
+
+export function lnglatToVec3(lngDeg, latDeg) {
+  const v = [0, 0, 0];
+  lnglatToVec3Into(v, 0, lngDeg, latDeg);
+  return v;
 }
 
 export const quat = {
@@ -41,10 +51,6 @@ export const quat = {
     const c = vec3.cross(a, b);
     const q = [c[0], c[1], c[2], 1 + d];
     return quat.normalize(q);
-  },
-  fromAxisAngle(axis, angle) {
-    const a = vec3.norm(axis), s = Math.sin(angle / 2);
-    return [a[0] * s, a[1] * s, a[2] * s, Math.cos(angle / 2)];
   },
   multiply(a, b) {
     const [ax, ay, az, aw] = a, [bx, by, bz, bw] = b;
