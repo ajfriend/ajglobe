@@ -27,6 +27,7 @@
   </span>
   <span style="margin-left:6px">
     <button id="np">north pole</button><button id="am">antimeridian</button>
+    <button id="recolor">recolor</button>
   </span>
   <span id="status">loading…</span>
 </div>
@@ -51,7 +52,15 @@ orb.lookAt(180, 25);
 const cache = new Map();
 async function bin(name, Ctor){ const b = await fetch(`data/${name}`).then(r=>{if(!r.ok)throw new Error(name+' '+r.status);return r.arrayBuffer();}); return new Ctor(b); }
 
-let layer = null;
+let layer = null, cur = null, flip = false;
+// Color a feature by its aspect-ratio percentile (viridis); `flip` reverses the
+// ramp so `recolor` has a visible effect through layer.update().
+function paint(i){
+  const a = cur.ar[i];
+  if(!Number.isFinite(a)) return [68,68,68,255];
+  const t = bisect(cur.sorted, a) / (cur.sorted.length - 1);
+  return viridis(flip ? 1 - t : t);
+}
 async function show(res){
   document.getElementById('status').textContent = `loading r${res}…`;
   if(!cache.has(res)){
@@ -63,13 +72,10 @@ async function show(res){
     const sorted = Float64Array.from([...ar].filter(Number.isFinite)).sort();
     cache.set(res, { pos, starts, ar, sorted });
   }
-  const { pos, starts, ar, sorted } = cache.get(res);
+  cur = cache.get(res); flip = false;
   const t0 = performance.now();
   if(layer) layer.remove();
-  layer = orb.polygons({
-    lnglat: pos, starts,
-    fill: (i) => Number.isFinite(ar[i]) ? viridis(bisect(sorted, ar[i])/(sorted.length-1)) : [68,68,68,255],
-  });
+  layer = orb.polygons({ lnglat: cur.pos, starts: cur.starts, fill: paint });
   const buildMs = Math.round(performance.now() - t0);
   const s = orb.stats;
   document.getElementById('status').innerHTML =
@@ -83,6 +89,17 @@ for(const r of [5,6]) document.getElementById('r'+r).onclick = (e)=>{
 };
 document.getElementById('np').onclick = ()=>orb.lookAt(0,90);
 document.getElementById('am').onclick = ()=>orb.lookAt(180,0);
+// Restyle in place — rewrites the per-feature style texture only, no re-tessellation.
+document.getElementById('recolor').onclick = ()=>{
+  if(!layer) return;
+  flip = !flip;
+  const t0 = performance.now();
+  layer.update({ fill: paint });
+  const ms = (performance.now() - t0).toFixed(1);
+  document.getElementById('status').innerHTML =
+    `restyled <b>${cur.ar.length.toLocaleString()}</b> features in <b>${ms} ms</b> `
+    + `· no re-tessellation (layer.update)`;
+};
 show(5);
 </script>
 </body>

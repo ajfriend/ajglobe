@@ -125,13 +125,15 @@ substrate from M2.
 - [x] **M1 — spike:** fills + depth sphere + arcball + zoom; pole/antimeridian
       proven on ivea7h r5/r6 at 60 FPS. *(polygons primitive — fills)*
 - [ ] **M2 — core API + composition surface**
-  - [ ] **per-feature style substrate** — `featureId` attribute + per-feature
-        style buffer read in-shader by id. The foundation the next three items +
-        M4 picking all share; restyle uploads `nFeatures` records and never
-        re-tessellates. (decision: §7)
+  - [x] **per-feature style substrate** — `featureId` (uint) attribute + an RGBA8
+        per-feature texture sampled in-shader by id (`texelFetch`, NEAREST). The
+        foundation the next items + M4 picking all share; restyle rewrites
+        `nFeatures` texels and never re-tessellates. (decision: §7) — verified on
+        ivea7h r5/r6 (1.18M features, style tex 4096×288), glError 0.
   - [ ] `project(lng,lat)→{x,y,visible}` / `unproject(x,y)→{lng,lat}`
   - [ ] event emitter: `on('hover'|'click'|'viewchange', …)`
-  - [ ] `layer.update({style})` — restyle without re-tessellating (via the substrate)
+  - [x] `layer.update({fill})` — restyle without re-tessellating (rewrites the
+        style texture via `texSubImage2D`; fill's alpha is carried per-feature)
   - [ ] per-feature opacity; document `xyz` vs `lnglat` input
   - [ ] large-cell fill subdivision (see §8) so coarse cells don't sink below the
         depth sphere

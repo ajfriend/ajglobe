@@ -8,7 +8,9 @@
 // that cell's fan like any other interior point.
 //
 // Milestone 1: filled convex polygons + background sphere + arcball/zoom.
-// (Thick strokes, picking, coastlines, lng/lat input helpers come next.)
+// M2: per-feature style substrate — each vertex carries a featureId; color lives
+// in a per-feature texture sampled by id, so a restyle (layer.update) touches
+// nFeatures texels, never the geometry. (Thick strokes, picking, lines come next.)
 
 import { lnglatToVec3Into } from './glmath.js';
 import { Camera } from './camera.js';
@@ -36,19 +38,27 @@ function program(gl, vs, fs) {
 
 const FILL_VS = `#version 300 es
 in vec3 a_pos;
-in vec4 a_color;
+in uint a_featureId;
 uniform mat4 u_mvp;
-out vec4 v_color;
+flat out uint v_fid;
 void main() {
-  v_color = a_color;
+  v_fid = a_featureId;
   gl_Position = u_mvp * vec4(a_pos, 1.0);
 }`;
 
+// Color is fetched from the per-feature style texture by id (row-major, width
+// u_styleW). texelFetch + NEAREST means an exact lookup, no filtering.
 const FILL_FS = `#version 300 es
 precision highp float;
-in vec4 v_color;
+precision highp int;
+uniform highp sampler2D u_style;
+uniform int u_styleW;
+flat in uint v_fid;
 out vec4 o_color;
-void main() { o_color = v_color; }`;
+void main() {
+  int fid = int(v_fid);
+  o_color = texelFetch(u_style, ivec2(fid % u_styleW, fid / u_styleW), 0);
+}`;
 
 const SPHERE_FS = `#version 300 es
 precision highp float;
@@ -100,7 +110,11 @@ export class Orb {
     this.fillProg = program(gl, FILL_VS, FILL_FS);
     this.sphereProg = program(gl, SPHERE_VS, SPHERE_FS);
     // Uniform locations are fixed after link — resolve once, not per frame.
-    this.fillU = { mvp: gl.getUniformLocation(this.fillProg, 'u_mvp') };
+    this.fillU = {
+      mvp: gl.getUniformLocation(this.fillProg, 'u_mvp'),
+      style: gl.getUniformLocation(this.fillProg, 'u_style'),
+      styleW: gl.getUniformLocation(this.fillProg, 'u_styleW'),
+    };
     this.sphereU = {
       mvp: gl.getUniformLocation(this.sphereProg, 'u_mvp'),
       color: gl.getUniformLocation(this.sphereProg, 'u_color'),
@@ -142,6 +156,42 @@ export class Orb {
     return buf;
   }
 
+  // Integer vertex attribute (vertexAttribIPointer; ids pass through unconverted).
+  _attribI(prog, name, data, size, type) {
+    const gl = this.gl;
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(prog, name);
+    gl.enableVertexAttribArray(loc);
+    gl.vertexAttribIPointer(loc, size, type, 0, 0);
+    return buf;
+  }
+
+  // Pack one RGBA8 texel per feature from the fill fn, row-major in W×H bytes.
+  _buildStyle(n, W, H, fillFn) {
+    const data = new Uint8Array(W * H * 4);
+    for (let c = 0; c < n; c++) {
+      const col = hexRGBA(fillFn(c));
+      data[c * 4] = col[0]; data[c * 4 + 1] = col[1];
+      data[c * 4 + 2] = col[2]; data[c * 4 + 3] = col[3];
+    }
+    return data;
+  }
+
+  // NEAREST RGBA8 texture used as the per-feature style lookup (sampled by id).
+  _styleTexture(W, H, data) {
+    const gl = this.gl;
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    return tex;
+  }
+
   _buildSphere() {
     const gl = this.gl;
     // Slightly inside the unit sphere so cells (at r=1) always sit in front of it
@@ -157,8 +207,10 @@ export class Orb {
 
   // Add a filled-polygon layer.
   //   xyz | lnglat : Float32Array of vertex positions (3/vertex or 2/vertex)
-  //   starts       : Uint32Array ring start indices (len = nCells + 1)
-  //   fill         : (cellIndex) => [r,g,b,a]  | [r,g,b,a] constant
+  //   starts       : Uint32Array ring start indices (len = nFeatures + 1)
+  //   fill         : (featureIndex) => [r,g,b,a] | '#rrggbb' | constant
+  // Returns the layer; layer.update({fill}) restyles (no re-tessellation),
+  // layer.remove() frees it.
   polygons({ xyz, lnglat, starts, fill }) {
     const gl = this.gl;
     const nCells = starts.length - 1;
@@ -175,17 +227,15 @@ export class Orb {
       }
     }
 
-    // per-vertex color from the cell's fill
-    const colors = new Uint8Array(nVerts * 4);
-    const fillFn = typeof fill === 'function' ? fill : () => fill;
+    // Per-vertex feature id (the cell each vertex belongs to). Style is NOT baked
+    // here — it lives in a per-feature texture sampled by id (built below), so a
+    // restyle rewrites nFeatures texels and never touches this geometry. All verts
+    // of a cell's fan share its id, so the fragment shader reads it 'flat'.
+    const fids = new Uint32Array(nVerts);
     let triCount = 0;
     for (let c = 0; c < nCells; c++) {
       const s = starts[c], e = starts[c + 1], k = e - s;
-      const col = hexRGBA(fillFn(c));
-      for (let v = s; v < e; v++) {
-        colors[v * 4] = col[0]; colors[v * 4 + 1] = col[1];
-        colors[v * 4 + 2] = col[2]; colors[v * 4 + 3] = col[3];
-      }
+      for (let v = s; v < e; v++) fids[v] = c;
       if (k >= 3) triCount += k - 2;
     }
 
@@ -200,18 +250,41 @@ export class Orb {
       }
     }
 
+    // Per-feature style: one RGBA8 texel per feature, indexed by id (row-major in
+    // a W-wide texture). Restyle = rewrite these texels; geometry is untouched.
+    const fillFn = typeof fill === 'function' ? fill : () => fill;
+    const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    const W = Math.min(maxTex, 4096);
+    const H = Math.max(1, Math.ceil(nCells / W));
+    if (H > maxTex) throw new Error(`too many features for one style texture: ${nCells}`);
+    const styleTex = this._styleTexture(W, H, this._buildStyle(nCells, W, H, fillFn));
+
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
     const pb = this._attrib(this.fillProg, 'a_pos', pos, 3);
-    const cb = this._attrib(this.fillProg, 'a_color', colors, 4, gl.UNSIGNED_BYTE, true);
+    const fb = this._attribI(this.fillProg, 'a_featureId', fids, 1, gl.UNSIGNED_INT);
     const ib = this._elements(idx);
     gl.bindVertexArray(null);
 
-    const layer = { vao, count: idx.length, nCells, nVerts, _buffers: [pb, cb, ib] };
+    const layer = {
+      vao, count: idx.length, nCells, nVerts,
+      styleTex, styleW: W, styleH: H, _buffers: [pb, fb, ib],
+    };
+    // Restyle without re-tessellating: rewrite the per-feature texels only.
+    layer.update = ({ fill: f } = {}) => {
+      if (f == null) return layer;
+      const fn = typeof f === 'function' ? f : () => f;
+      gl.bindTexture(gl.TEXTURE_2D, styleTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE,
+        this._buildStyle(nCells, W, H, fn));
+      this._dirty = true;
+      return layer;
+    };
     layer.remove = () => {
       this.layers = this.layers.filter((l) => l !== layer);
       gl.deleteVertexArray(vao);
       layer._buffers.forEach((b) => gl.deleteBuffer(b));
+      gl.deleteTexture(styleTex);
       this._dirty = true;
     };
     this.layers.push(layer);
@@ -252,10 +325,15 @@ export class Orb {
     gl.bindVertexArray(this.sphereVAO);
     gl.drawElements(gl.TRIANGLES, this.sphereCount, gl.UNSIGNED_INT, 0);
 
-    // 2) polygon fills (depth-tested against the sphere)
+    // 2) polygon fills (depth-tested against the sphere). Color comes from each
+    // layer's per-feature style texture, sampled by a_featureId.
     gl.useProgram(this.fillProg);
     gl.uniformMatrix4fv(this.fillU.mvp, false, mvp);
+    gl.uniform1i(this.fillU.style, 0);
+    gl.activeTexture(gl.TEXTURE0);
     for (const l of this.layers) {
+      gl.bindTexture(gl.TEXTURE_2D, l.styleTex);
+      gl.uniform1i(this.fillU.styleW, l.styleW);
       gl.bindVertexArray(l.vao);
       gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
     }
