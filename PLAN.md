@@ -303,6 +303,18 @@ substrate from M2.
 - **Convex-only fills.** Topology fan assumes convexity (true for DGGS cells).
   Continents are **outline-only** (lines, no fill) so this isn't blocking;
   concave fills need spherical ear-clipping (later).
+- **No explicit draw-order / `zIndex` (future improvement).** Stacking is fixed
+  bands: background sphere → polygon **fills** → **lines** (lines always over fills;
+  see `_renderScene`). Within a band, order = creation order, but the two bands
+  behave differently: **lines** are a pure overlay (`depthMask(false)`) so they
+  painter's-blend — *last created wins*; **fills** write depth at the same radius
+  (1.0), so overlapping fills are governed by `depthFunc(LESS)` — *first-drawn wins*
+  with z-fighting risk. Fine for non-overlapping tilings (DGGS cells, country
+  polygons) and outline-over-fill, which is all we do today. Stacking
+  **semi-transparent fills** (heatmap over a base choropleth) is the case that
+  needs real work: add a per-layer `zIndex` and either a small per-layer radius
+  offset, or make fills painter's-order (drop fill depth-write) like the lines.
+  Reorder today by `remove()` + re-add in the desired order.
 - **Headless benchmarking is finicky.** Driving a render loop from a single long
   `puppeteer evaluate` trips the protocol timeout / "promise collected". Use a
   *detached* spin that writes frame deltas to a global, let wall-clock pass (a
