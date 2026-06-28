@@ -117,7 +117,9 @@ orb.lines({ lnglat|xyz, starts, color, width });   // thick AA great-circle stro
 orb.lookAt(lng, lat);
 orb.project(lng, lat);             // -> {x, y, visible}  (canvas CSS px)
 orb.unproject(x, y);               // -> {lng, lat} | null
-orb.on('hover'|'click'|'viewchange', cb);          // -> unsubscribe fn
+orb.pick(x, y);                    // -> {layer, index} | null  (GPU color picking)
+orb.highlight(index);              // tint one fill feature (-1 = none)
+orb.on('hover'|'click'|'viewchange', cb);          // hover/click: {x,y,lng,lat,index,layer}
 await orb.snapshot({ width, height, supersample, transparent, type });  // -> PNG Blob
 orb.stats;                         // {cells, verts}
 ```
@@ -162,10 +164,17 @@ substrate from M2.
       width 2↔6 px, AA edges, 90° edge → 32 arc segments, back hemisphere hidden.
       *Deferred:* round/miter joins (shallow densified corners look fine); per-
       feature width/color (one color+width per layer for now).
-- [ ] **M4 — GPU hover picking:** offscreen id-color FBO + readPixels → feature
-      index; wires into `on('hover'/'click')`. The offscreen-FBO + `readPixels` +
-      `_renderScene(w,h)` infra already exists (built for `snapshot()`) — picking
-      reuses it: render featureId-as-color to a 1×1 (or small) FBO and read back.
+- [x] **M4 — GPU hover picking** — `pick(x,y) → {layer, index} | null`, and
+      `index`/`layer` now populated in `on('hover'|'click')` (was null). A second
+      program draws the fill VAOs with `featureId+idBase+1` encoded as an RGBA8
+      color into an offscreen FBO (id 0 = nothing); the depth sphere is drawn first
+      so back-hemisphere cells are occluded, blend off so ids are exact. The
+      id-buffer is rendered lazily (only when the view/layers/size change) then read
+      1px per pointer. Shared `featureId` attribute (needed `layout(location)` so the
+      pick program reuses the fill VAOs) + reused `_renderTarget`/`readPixels`.
+      Bonus: `highlight(index)` tints the hovered feature via a `u_hoverId` uniform
+      (no texture rebuild). Verified r5+r6 (1.18M cells): in-range distinct indices,
+      off-globe → null, highlight + demo readout, snapshot still intact, glError 0.
 - [x] **`snapshot({width,height,supersample,transparent,type}) → PNG Blob`** —
       renders the current view to an offscreen FBO at any resolution (supersampled
       for AA), independent of the on-screen canvas; transparent-background option.

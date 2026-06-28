@@ -36,9 +36,11 @@ function program(gl, vs, fs) {
   return p;
 }
 
+// Explicit attribute locations so the fill VAOs can be drawn by the pick program
+// too (GPU picking, M4) — both programs must agree on a_pos / a_featureId.
 const FILL_VS = `#version 300 es
-in vec3 a_pos;
-in uint a_featureId;
+layout(location = 0) in vec3 a_pos;
+layout(location = 1) in uint a_featureId;
 uniform mat4 u_mvp;
 flat out uint v_fid;
 void main() {
@@ -47,17 +49,45 @@ void main() {
 }`;
 
 // Color is fetched from the per-feature style texture by id (row-major, width
-// u_styleW). texelFetch + NEAREST means an exact lookup, no filtering.
+// u_styleW). texelFetch + NEAREST means an exact lookup, no filtering. The feature
+// matching u_hoverId (-1 = none) is tinted toward white for a free hover highlight.
 const FILL_FS = `#version 300 es
 precision highp float;
 precision highp int;
 uniform highp sampler2D u_style;
 uniform int u_styleW;
+uniform int u_hoverId;
 flat in uint v_fid;
 out vec4 o_color;
 void main() {
   int fid = int(v_fid);
-  o_color = texelFetch(u_style, ivec2(fid % u_styleW, fid / u_styleW), 0);
+  vec4 c = texelFetch(u_style, ivec2(fid % u_styleW, fid / u_styleW), 0);
+  if (fid == u_hoverId) c.rgb = mix(c.rgb, vec3(1.0), 0.5);
+  o_color = c;
+}`;
+
+// Picking: draw the fills but write each feature's id as a color into an offscreen
+// buffer (M4). id = featureId + u_idBase + 1, so 0 reads back as "nothing".
+const PICK_VS = `#version 300 es
+layout(location = 0) in vec3 a_pos;
+layout(location = 1) in uint a_featureId;
+uniform mat4 u_mvp;
+flat out uint v_fid;
+void main() {
+  v_fid = a_featureId;
+  gl_Position = u_mvp * vec4(a_pos, 1.0);
+}`;
+
+const PICK_FS = `#version 300 es
+precision highp float;
+precision highp int;
+uniform uint u_idBase;
+flat in uint v_fid;
+out vec4 o_color;
+void main() {
+  uint id = v_fid + u_idBase + 1u;
+  o_color = vec4(float(id & 0xFFu), float((id >> 8) & 0xFFu),
+                 float((id >> 16) & 0xFFu), float((id >> 24) & 0xFFu)) / 255.0;
 }`;
 
 const SPHERE_FS = `#version 300 es
@@ -149,11 +179,17 @@ export class Orb {
     this.fillProg = program(gl, FILL_VS, FILL_FS);
     this.sphereProg = program(gl, SPHERE_VS, SPHERE_FS);
     this.strokeProg = program(gl, STROKE_VS, STROKE_FS);
+    this.pickProg = program(gl, PICK_VS, PICK_FS);
     // Uniform locations are fixed after link — resolve once, not per frame.
     this.fillU = {
       mvp: gl.getUniformLocation(this.fillProg, 'u_mvp'),
       style: gl.getUniformLocation(this.fillProg, 'u_style'),
       styleW: gl.getUniformLocation(this.fillProg, 'u_styleW'),
+      hoverId: gl.getUniformLocation(this.fillProg, 'u_hoverId'),
+    };
+    this.pickU = {
+      mvp: gl.getUniformLocation(this.pickProg, 'u_mvp'),
+      idBase: gl.getUniformLocation(this.pickProg, 'u_idBase'),
     };
     this.sphereU = {
       mvp: gl.getUniformLocation(this.sphereProg, 'u_mvp'),
@@ -166,12 +202,15 @@ export class Orb {
       color: gl.getUniformLocation(this.strokeProg, 'u_color'),
     };
     this.dpr = 1;
+    this._hoverId = -1;        // feature to highlight in the fills (-1 = none)
+    this._pick = null;         // offscreen id-buffer { fbo, tex, rbo, w, h }
+    this._pickValid = false;   // stale when the view / layers / size change
     this._buildSphere();
 
     this.layers = [];
     this.lineLayers = [];
     this._handlers = { hover: [], click: [], viewchange: [] };
-    this.cam = new Camera(canvas, () => { this._dirty = true; this._emit('viewchange'); });
+    this.cam = new Camera(canvas, () => { this._dirty = true; this._pickValid = false; this._emit('viewchange'); });
     this._dirty = true;
     canvas.addEventListener('pointermove', (e) => this._emitPointer('hover', e));
     canvas.addEventListener('click', (e) => this._emitPointer('click', e));
@@ -185,7 +224,7 @@ export class Orb {
     gl.clearColor(...this.bg);
 
     this._resize();
-    new ResizeObserver(() => { this._resize(); this._dirty = true; }).observe(canvas);
+    new ResizeObserver(() => { this._resize(); this._dirty = true; this._pickValid = false; }).observe(canvas);
     const loop = () => { this._frame(); requestAnimationFrame(loop); };
     requestAnimationFrame(loop);
   }
@@ -397,9 +436,11 @@ export class Orb {
       layer._buffers.forEach((b) => gl.deleteBuffer(b));
       gl.deleteTexture(styleTex);
       this._dirty = true;
+      this._pickValid = false;
     };
     this.layers.push(layer);
     this._dirty = true;
+    this._pickValid = false;
     return layer;
   }
 
@@ -491,9 +532,14 @@ export class Orb {
   _emit(type, e) { const hs = this._handlers[type]; if (hs) for (const f of hs) f(e); }
   _emitPointer(type, e) {
     const hs = this._handlers[type];
-    if (!hs || !hs.length) return;          // skip the unproject when nobody listens
+    if (!hs || !hs.length) return;          // skip the work when nobody listens
     const g = this.cam.unproject(e.offsetX, e.offsetY);
-    this._emit(type, { x: e.offsetX, y: e.offsetY, lng: g ? g.lng : null, lat: g ? g.lat : null, index: null });
+    const p = this.pick(e.offsetX, e.offsetY);
+    this._emit(type, {
+      x: e.offsetX, y: e.offsetY,
+      lng: g ? g.lng : null, lat: g ? g.lat : null,
+      index: p ? p.index : null, layer: p ? p.layer : null,
+    });
   }
 
   get stats() {
@@ -545,6 +591,7 @@ export class Orb {
     gl.useProgram(this.fillProg);
     gl.uniformMatrix4fv(this.fillU.mvp, false, mvp);
     gl.uniform1i(this.fillU.style, 0);
+    gl.uniform1i(this.fillU.hoverId, this._hoverId);
     gl.activeTexture(gl.TEXTURE0);
     for (const l of this.layers) {
       gl.bindTexture(gl.TEXTURE_2D, l.styleTex);
@@ -569,6 +616,76 @@ export class Orb {
       gl.depthMask(true);
     }
     gl.bindVertexArray(null);
+  }
+
+  // Highlight one fill feature (tinted toward white), or -1 for none.
+  highlight(index) {
+    const id = index == null ? -1 : index;
+    if (id === this._hoverId) return;
+    this._hoverId = id;
+    this._dirty = true;
+  }
+
+  // Render the fills into the offscreen id-buffer: each feature's id as a color.
+  // Lazy — only when the view/layers/size changed since the last pick. The depth
+  // sphere is drawn first (as id 0) so back-hemisphere cells are occluded and can't
+  // be picked. Blend is off so ids are written exactly.
+  _renderPickScene() {
+    const gl = this.gl, w = this.canvas.width, h = this.canvas.height;
+    if (!this._pick || this._pick.w !== w || this._pick.h !== h) {
+      if (this._pick) { gl.deleteFramebuffer(this._pick.fbo); gl.deleteTexture(this._pick.tex); gl.deleteRenderbuffer(this._pick.rbo); }
+      this._pick = { ...this._renderTarget(w, h), w, h };
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this._pick.fbo);
+    gl.viewport(0, 0, w, h);
+    gl.disable(gl.BLEND);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    const mvp = this.cam.mvp(w / h);
+
+    // depth-only occluder: the sphere writes depth (color 0 = "nothing")
+    gl.useProgram(this.sphereProg);
+    gl.uniformMatrix4fv(this.sphereU.mvp, false, mvp);
+    gl.uniform4f(this.sphereU.color, 0, 0, 0, 0);
+    gl.bindVertexArray(this.sphereVAO);
+    gl.drawElements(gl.TRIANGLES, this.sphereCount, gl.UNSIGNED_INT, 0);
+
+    // fills as id-colors; u_idBase gives each layer a distinct id range
+    gl.useProgram(this.pickProg);
+    gl.uniformMatrix4fv(this.pickU.mvp, false, mvp);
+    let base = 0;
+    for (const l of this.layers) {
+      gl.uniform1ui(this.pickU.idBase, base);
+      gl.bindVertexArray(l.vao);
+      gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
+      base += l.nCells;
+    }
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.enable(gl.BLEND);
+    this._pickValid = true;
+  }
+
+  // Which fill feature is under a canvas pixel? -> { layer, index } or null. Renders
+  // the id-buffer once per view change, then reads back a single pixel.
+  pick(px, py) {
+    if (!this.layers.length) return null;
+    if (!this._pickValid) this._renderPickScene();
+    const gl = this.gl;
+    const x = Math.round(px * this.dpr), y = Math.round(this.canvas.height - py * this.dpr);
+    if (x < 0 || y < 0 || x >= this.canvas.width || y >= this.canvas.height) return null;
+    const p = new Uint8Array(4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this._pick.fbo);
+    gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, p);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const id = p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] * 0x1000000);
+    if (id === 0) return null;                  // background / sphere / back hemisphere
+    let global = id - 1;
+    for (const l of this.layers) {
+      if (global < l.nCells) return { layer: l, index: global };
+      global -= l.nCells;
+    }
+    return null;
   }
 
   // Offscreen render target: RGBA8 color texture + depth renderbuffer + FBO at
