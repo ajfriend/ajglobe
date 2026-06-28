@@ -20,9 +20,10 @@
 </head>
 <body>
 <canvas id="c"></canvas>
-<div id="pin" style="position:absolute;z-index:5;transform:translate(-50%,-50%);pointer-events:none;display:none;white-space:nowrap">
-  <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#58a6ff;box-shadow:0 0 0 2px #06121f;vertical-align:middle"></span>
-  <span style="color:#e6edf3;margin-left:5px;text-shadow:0 1px 3px #000;vertical-align:middle">London</span>
+<div id="pin" style="position:absolute;z-index:5;pointer-events:none;display:none">
+  <!-- (left,top) is the projected point; the DOT is centered on it, the LABEL is offset so it never displaces the dot -->
+  <span style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);width:8px;height:8px;border-radius:50%;background:#58a6ff;box-shadow:0 0 0 2px #06121f"></span>
+  <span style="position:absolute;left:9px;top:-7px;white-space:nowrap;color:#e6edf3;text-shadow:0 1px 3px #000">London</span>
 </div>
 <div id="hud">
   <b>ajglobe</b> · ivea7h every cell
