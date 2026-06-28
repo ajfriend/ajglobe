@@ -143,6 +143,25 @@ function hexRGBA(c) {
           parseInt(h.slice(4, 6), 16), 255];
 }
 
+// Default CDN for the coastlines()/borders() convenience helpers: Natural Earth
+// vector GeoJSON via jsDelivr, pinned to a release. No data is bundled — these are
+// fetched on demand. Override with the `baseUrl` option (e.g. self-hosted assets).
+const DEFAULT_NE = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@v5.1.2/geojson';
+
+// Flatten a GeoJSON FeatureCollection of LineString/MultiLineString into the layout
+// orb.lines() wants: { lnglat:[lng,lat,...], starts:[polyline start indices] }.
+function geojsonLines(gj) {
+  const lng = [], starts = [0];
+  const push = (coords) => { for (const c of coords) lng.push(c[0], c[1]); starts.push(lng.length / 2); };
+  for (const f of (gj.features || [])) {
+    const g = f.geometry;
+    if (!g) continue;
+    if (g.type === 'LineString') push(g.coordinates);
+    else if (g.type === 'MultiLineString') for (const line of g.coordinates) push(line);
+  }
+  return { lnglat: new Float32Array(lng), starts: new Uint32Array(starts) };
+}
+
 // UV sphere triangle mesh, radius r.
 function uvSphere(r, slices = 64, stacks = 32) {
   const pos = [], idx = [];
@@ -531,6 +550,20 @@ export class Orb {
     this.lineLayers.push(layer);
     this._dirty = true;
     return layer;
+  }
+
+  // Batteries-included reference geometry (Natural Earth), fetched from a CDN and
+  // drawn via lines() — the library bundles no data. detail: '110m' | '50m' | '10m'.
+  // baseUrl overrides the default CDN (e.g. self-hosted GeoJSON). Returns the layer.
+  async coastlines(opts = {}) { return this._neLines('coastline', '#000000', 1.5, opts); }
+  async borders(opts = {}) { return this._neLines('admin_0_boundary_lines_land', '#c2185b', 1.2, opts); }
+
+  async _neLines(layer, defColor, defWidth, { detail = '50m', color, width, baseUrl } = {}) {
+    const url = `${baseUrl || DEFAULT_NE}/ne_${detail}_${layer}.geojson`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`ajglobe: failed to load ${url} (${res.status})`);
+    const { lnglat, starts } = geojsonLines(await res.json());
+    return this.lines({ lnglat, starts, color: color || defColor, width: width || defWidth });
   }
 
   lookAt(lng, lat) { this.cam.lookAt(lng, lat); }

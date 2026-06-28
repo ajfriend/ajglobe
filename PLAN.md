@@ -185,13 +185,15 @@ substrate from M2.
 - [ ] **M5 — reference-geometry helpers + polish**
   - [x] `lines()` primitive over open polylines — done with M3 (thick AA strokes
         + slerp densification). Coastline overlay demo in the example.
-  - [ ] bundled low-res assets: **coastlines** and **country borders** (Natural
-        Earth admin-0), vendored as compact binary (same `pos/idx` layout as the
-        cell data) so they load instantly with no GeoJSON parse
-  - [ ] helpers: `coastlines(opts)` and `borders(opts)` (color/width/opacity) —
-        thin wrappers over `lines()` so country outlines are one call
-  - [ ] note: antimeridian-spanning countries (Russia, Fiji, US/Alaska) render
-        correctly with no unwrap — that's the whole point of drawing in 3D
+  - [x] **`coastlines(opts)` / `borders(opts)` — CDN-backed, zero bundled data.**
+        One call: fetch Natural Earth GeoJSON (coastline / admin-0 boundary-lines)
+        from jsDelivr (pinned NE release; `baseUrl` overridable) → `geojsonLines()`
+        → `lines()`. `detail: 110m|50m|10m`. The library bundles **no** geo bytes
+        (decision §7). Demoed in the example (coastlines/borders toggles + detail).
+        Verified r5: default CDN + `baseUrl` override, coast/border line counts
+        match the binary converter, glError 0.
+  - [x] note: antimeridian-spanning countries (Russia, Fiji, US/Alaska) render
+        correctly with no unwrap — shown by `borders()`; that's the point of 3D.
   - [ ] more examples, README, `dist/` esbuild bundle, basic geometry unit tests
 - [ ] **M6 — `points()` primitive:** the third GeoJSON primitive. Screen-space
       quads/sprites at each feature's unit-sphere position; depth-
@@ -221,6 +223,16 @@ substrate from M2.
   backend-abstraction engine (luma.gl v9) earns its weight there. Lighter middle
   ground if GL plumbing gets gnarly first (M4 FBO picking, M6 instancing): **twgl
   or regl** (tiny, ESM, no build step) — not a full engine.
+- **No bundled geographic data; reference geometry is a CDN-backed convenience.**
+  The library ships **zero** geo bytes (the 10m tier alone is ~3.8 MB — it would
+  dwarf a few-hundred-line core, and §3 says the core owns no data loading). But
+  `coastlines()`/`borders()` keep it *one call*: they fetch Natural Earth GeoJSON
+  from jsDelivr (pinned NE release; `baseUrl` overridable) and draw via `lines()`.
+  So: trivially easy by default, nothing in `dist/`. *Why GeoJSON, not our binary:*
+  no infra needed (jsDelivr already mirrors NE); the cost is heavier transfer (10m
+  ≈ 10 MB, ~2–3 MB gzipped by the CDN) + on-demand parse. *Production weight* is the
+  app's call: pre-convert to the parse-free `pos/idx` binary, self-host, point
+  `baseUrl` there (or feed `lines()` directly). Ship the mechanism, not the payload.
 - v1 must-haves: fills, thick AA strokes, solid background sphere, hover picking,
   reference outlines (**coastlines + country borders**). **Orthographic only** for v1.
 - Fill triangulation = **topology fan** (convex rings only — true of DGGS cells,

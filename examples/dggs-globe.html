@@ -32,7 +32,11 @@
   </span>
   <span style="margin-left:6px">
     <button id="np">north pole</button><button id="am">antimeridian</button>
-    <button id="recolor">recolor</button><button id="fade">fade</button><button id="coast">coastlines</button><button id="save">save PNG</button>
+    <button id="recolor">recolor</button><button id="fade">fade</button><button id="save">save PNG</button>
+  </span>
+  <span style="margin-left:6px">
+    <button id="coast">coastlines</button><button id="border">borders</button>
+    <span style="color:#5b6672;margin:0 2px">detail</span><button id="d-110m">110m</button><button id="d-50m" class="on">50m</button><button id="d-10m">10m</button>
   </span>
   <span id="status">loading…</span>
   <span id="cursor" style="display:block;margin-top:4px;color:#7d8b99">move over the globe…</span>
@@ -105,19 +109,25 @@ document.getElementById('fade').onclick = (e)=>{
 };
 document.getElementById('np').onclick = ()=>orb.lookAt(0,90);
 document.getElementById('am').onclick = ()=>orb.lookAt(180,0);
-// Coastlines (Natural Earth 110m) as a thin GL_LINES overlay — toggle on/off.
-let coast = null, coastData = null;
-document.getElementById('coast').onclick = async (e)=>{
-  if(coast){ coast.remove(); coast = null; e.target.classList.remove('on'); return; }
-  if(!coastData){
-    const [pos, starts] = await Promise.all([
-      bin('ne_110m_coast_pos.f32', Float32Array),
-      bin('ne_110m_coast_idx.u32', Uint32Array),
-    ]);
-    coastData = { pos, starts };
-  }
-  coast = orb.lines({ lnglat: coastData.pos, starts: coastData.starts, color: '#000000', width: 2 });
+// Reference geometry: one call each — orb.coastlines() / orb.borders() fetch Natural
+// Earth from a CDN (no data bundled) and draw via orb.lines(). Toggle each on/off; the
+// detail buttons reload whatever is on at the new resolution.
+let detail = '50m';
+const refLayer = { coast: null, border: null };
+const drawFn = { coast: o => orb.coastlines(o), border: o => orb.borders(o) };
+async function drawRef(kind){           // (re)create the layer at the current detail
+  if(refLayer[kind]) refLayer[kind].remove();
+  refLayer[kind] = await drawFn[kind]({ detail });
+}
+for(const kind of ['coast','border']) document.getElementById(kind).onclick = async (e)=>{
+  if(refLayer[kind]){ refLayer[kind].remove(); refLayer[kind] = null; e.target.classList.remove('on'); return; }
   e.target.classList.add('on');
+  await drawRef(kind);
+};
+for(const d of ['110m','50m','10m']) document.getElementById('d-'+d).onclick = async (e)=>{
+  detail = d;
+  document.querySelectorAll('[id^=d-]').forEach(b=>b.classList.toggle('on', b===e.target));
+  for(const kind of ['coast','border']) if(refLayer[kind]) await drawRef(kind);  // reload what's on
 };
 
 // Composition surface demo: a DOM pin positioned by project() (hidden on the

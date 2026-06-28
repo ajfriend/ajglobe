@@ -29,8 +29,10 @@ lines (coastlines), and drag/zoom — done right, once.
 + scroll zoom, in WebGL2, zero dependencies. Proven against every ivea7h cell at
 r5 (168k) and r6 (1.18M) — the pole cell fills, the antimeridian is clean.
 
-Next: lng/lat input helpers ✓ · thick AA strokes · GPU hover picking ·
-coastline helper · `dist/` bundle.
+Since then: per-feature styling + opacity, `project`/`unproject` + hover/click
+events, thick AA great-circle strokes (`lines()`), GPU hover picking, `snapshot()`
+PNG export, `coastlines()`/`borders()`, and `destroy()`. Next: `points()`, a
+`dist/` bundle, and unit tests. See [PLAN.md](PLAN.md).
 
 ## Use
 
@@ -43,7 +45,23 @@ orb.polygons({
   fill: i => [r,g,b,a],   // per-cell color, or a constant [r,g,b,a]
 });
 orb.lookAt(180, 0);   // center a lng/lat under the viewer
+orb.on('hover', e => { /* e.index = feature under the cursor (GPU picking) */ });
 ```
+
+## Reference geometry (coastlines / borders)
+
+The library bundles **no** geographic data. Two helpers make it one call anyway —
+they fetch Natural Earth from a CDN (jsDelivr, pinned) and draw via `lines()`:
+
+```js
+await orb.coastlines();                 // detail defaults to '50m'
+await orb.borders({ detail: '10m', color: '#c2185b' });
+```
+
+`detail` is `'110m' | '50m' | '10m'`; both return a layer (`.remove()` to toggle).
+Want it lighter or offline? Pass `baseUrl` to self-hosted GeoJSON, or feed your own
+data straight to `orb.lines({ lnglat, starts, color, width })` — the renderer takes
+plain typed arrays, so the data source is entirely yours.
 
 ## Examples
 
