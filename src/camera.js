@@ -5,13 +5,14 @@
 import { vec3, quat, mat4, lnglatToVec3, vec3ToLngLat } from './glmath.js';
 
 // Keyboard rotation map: e.code -> [axis x, y, z, sign], a rotation axis in the
-// screen-aligned world frame (pre-multiplied like the drag). Mirrors the
-// geojson_viz tool — arrows + WASD + QE: Up/Down+W/S tilt (latitude), A/D spin
-// (longitude), Left/Right+Q/E roll about the view axis.
+// world frame (pre-multiplied like the drag). Directions are by on-screen motion
+// (verified empirically — the screen-vertical tilt is the world X axis here, the
+// horizontal spin is world Y): Up/Down + W/S move the globe up/down, A/D move it
+// left/right (both matching a drag), Left/Right + Q/E roll about the view axis.
 const KEY_AXIS = {
-  ArrowUp: [0, 1, 0, 1], KeyW: [0, 1, 0, 1],      // tilt toward the north
-  ArrowDown: [0, 1, 0, -1], KeyS: [0, 1, 0, -1],  // tilt toward the south
-  KeyA: [1, 0, 0, -1], KeyD: [1, 0, 0, 1],        // spin (longitude)
+  ArrowUp: [1, 0, 0, -1], KeyW: [1, 0, 0, -1],    // up
+  ArrowDown: [1, 0, 0, 1], KeyS: [1, 0, 0, 1],    // down
+  KeyA: [0, 1, 0, -1], KeyD: [0, 1, 0, 1],        // left / right
   ArrowLeft: [0, 0, 1, 1], KeyQ: [0, 0, 1, 1],    // roll
   ArrowRight: [0, 0, 1, -1], KeyE: [0, 0, 1, -1],
 };
