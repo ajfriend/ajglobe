@@ -2,7 +2,7 @@
 // half-extent). Arcball drag and wheel zoom. Emits a change callback so the
 // renderer only redraws when something moved.
 
-import { vec3, quat, mat4, lnglatToVec3 } from './glmath.js';
+import { vec3, quat, mat4, lnglatToVec3, vec3ToLngLat } from './glmath.js';
 
 export class Camera {
   constructor(canvas, onChange) {
@@ -73,5 +73,37 @@ export class Camera {
     const view = mat4.lookAt([0, 0, 3], [0, 0, 0], [0, 1, 0]);
     const model = mat4.fromQuat(this.q);
     return mat4.multiply(proj, mat4.multiply(view, model));
+  }
+
+  // Geographic point -> canvas CSS pixels. visible=false when the point is on
+  // the far (back) hemisphere, behind the globe from the viewer.
+  project(lngDeg, latDeg) {
+    const p = lnglatToVec3(lngDeg, latDeg);
+    const r = this.canvas.getBoundingClientRect();
+    const clip = mat4.mulVec4(this.mvp(r.width / r.height), [p[0], p[1], p[2], 1]);
+    return {
+      x: (clip[0] / clip[3] * 0.5 + 0.5) * r.width,
+      y: (1 - (clip[1] / clip[3] * 0.5 + 0.5)) * r.height,
+      // Front hemisphere = the model-rotated point faces the +z viewer.
+      visible: quat.rotateVec3(this.q, p)[2] > 0,
+    };
+  }
+
+  // Canvas CSS pixel -> { lng, lat } where the view ray meets the globe, or null
+  // if the pixel misses it. inv(MVP) maps NDC straight to OBJECT (geographic)
+  // space — MVP already bakes in the model rotation — so we intersect the unit
+  // sphere there and read lng/lat off the hit directly (no extra un-rotation).
+  unproject(px, py) {
+    const r = this.canvas.getBoundingClientRect();
+    const inv = mat4.invert(this.mvp(r.width / r.height));
+    if (!inv) return null;
+    const nx = (px / r.width) * 2 - 1, ny = 1 - (py / r.height) * 2;
+    const at = (z) => { const v = mat4.mulVec4(inv, [nx, ny, z, 1]); return [v[0] / v[3], v[1] / v[3], v[2] / v[3]]; };
+    const a = at(-1), d = vec3.sub(at(1), a);            // ray a + t d (object space)
+    const A = vec3.dot(d, d), B = 2 * vec3.dot(a, d), C = vec3.dot(a, a) - 1;
+    const disc = B * B - 4 * A * C;
+    if (disc < 0) return null;                            // misses the globe
+    const t = (-B - Math.sqrt(disc)) / (2 * A);          // nearest (front) intersection
+    return vec3ToLngLat([a[0] + t * d[0], a[1] + t * d[1], a[2] + t * d[2]]);
   }
 }

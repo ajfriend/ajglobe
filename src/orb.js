@@ -123,8 +123,11 @@ export class Orb {
 
     this.layers = [];
     this.lineLayers = [];
-    this.cam = new Camera(canvas, () => { this._dirty = true; });
+    this._handlers = { hover: [], click: [], viewchange: [] };
+    this.cam = new Camera(canvas, () => { this._dirty = true; this._emit('viewchange'); });
     this._dirty = true;
+    canvas.addEventListener('pointermove', (e) => this._emitPointer('hover', e));
+    canvas.addEventListener('click', (e) => this._emitPointer('click', e));
 
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
@@ -343,6 +346,28 @@ export class Orb {
   }
 
   lookAt(lng, lat) { this.cam.lookAt(lng, lat); }
+
+  // Composition surface (the official overlay API): geo<->screen + events.
+  // project(lng,lat) -> { x, y, visible }  (canvas CSS px; visible=false on back)
+  // unproject(x,y)   -> { lng, lat } | null (null when the pixel misses the globe)
+  project(lng, lat) { return this.cam.project(lng, lat); }
+  unproject(x, y) { return this.cam.unproject(x, y); }
+
+  // on('hover'|'click'|'viewchange', cb) -> unsubscribe fn.
+  // hover/click payload: { x, y, lng, lat, index } — lng/lat are null off-globe;
+  // index is reserved for M4 GPU picking (null until then). viewchange: no arg.
+  on(type, cb) {
+    (this._handlers[type] ||= []).push(cb);
+    return () => { this._handlers[type] = this._handlers[type].filter((f) => f !== cb); };
+  }
+  _emit(type, e) { const hs = this._handlers[type]; if (hs) for (const f of hs) f(e); }
+  _emitPointer(type, e) {
+    const hs = this._handlers[type];
+    if (!hs || !hs.length) return;          // skip the unproject when nobody listens
+    const g = this.cam.unproject(e.offsetX, e.offsetY);
+    this._emit(type, { x: e.offsetX, y: e.offsetY, lng: g ? g.lng : null, lat: g ? g.lat : null, index: null });
+  }
+
   get stats() {
     return {
       cells: this.layers.reduce((a, l) => a + l.nCells, 0),

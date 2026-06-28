@@ -130,8 +130,12 @@ substrate from M2.
         foundation the next items + M4 picking all share; restyle rewrites
         `nFeatures` texels and never re-tessellates. (decision: §7) — verified on
         ivea7h r5/r6 (1.18M features, style tex 4096×288), glError 0.
-  - [ ] `project(lng,lat)→{x,y,visible}` / `unproject(x,y)→{lng,lat}`
-  - [ ] event emitter: `on('hover'|'click'|'viewchange', …)`
+  - [x] `project(lng,lat)→{x,y,visible}` / `unproject(x,y)→{lng,lat}` — ortho
+        ray ∩ unit sphere; inv(MVP) lands in object space directly. Verified:
+        project∘unproject roundtrips to err 0; back-hemisphere `visible:false`.
+  - [x] event emitter: `on('hover'|'click'|'viewchange', cb)` → unsubscribe fn.
+        hover/click payload `{x,y,lng,lat,index}` (lng/lat null off-globe; index
+        reserved for M4 picking). Example: DOM pin via `project()` + cursor readout.
   - [x] `layer.update({fill})` — restyle without re-tessellating (rewrites the
         style texture via `texSubImage2D`; fill's alpha is carried per-feature)
   - [ ] per-feature opacity; document `xyz` vs `lnglat` input

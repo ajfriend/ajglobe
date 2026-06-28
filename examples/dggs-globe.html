@@ -20,6 +20,10 @@
 </head>
 <body>
 <canvas id="c"></canvas>
+<div id="pin" style="position:absolute;z-index:5;transform:translate(-50%,-50%);pointer-events:none;display:none;white-space:nowrap">
+  <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#58a6ff;box-shadow:0 0 0 2px #06121f;vertical-align:middle"></span>
+  <span style="color:#e6edf3;margin-left:5px;text-shadow:0 1px 3px #000;vertical-align:middle">London</span>
+</div>
 <div id="hud">
   <b>ajglobe</b> · ivea7h every cell
   <span style="margin-left:6px">
@@ -30,6 +34,7 @@
     <button id="recolor">recolor</button><button id="coast">coastlines</button>
   </span>
   <span id="status">loading…</span>
+  <span id="cursor" style="display:block;margin-top:4px;color:#7d8b99">move over the globe…</span>
 </div>
 
 <script type="module">
@@ -103,6 +108,21 @@ document.getElementById('coast').onclick = async (e)=>{
   coast = orb.lines({ lnglat: coastData.pos, starts: coastData.starts, color: '#e6edf3' });
   e.target.classList.add('on');
 };
+
+// Composition surface demo: a DOM pin positioned by project() (hidden on the
+// back hemisphere), and a cursor lng/lat readout fed by the hover event.
+const pinEl = document.getElementById('pin'), PIN = { lng: -0.13, lat: 51.5 };
+function placePin(){
+  const p = orb.project(PIN.lng, PIN.lat);
+  pinEl.style.display = p.visible ? 'block' : 'none';
+  pinEl.style.left = p.x + 'px'; pinEl.style.top = p.y + 'px';
+}
+orb.on('viewchange', placePin);
+const cursorEl = document.getElementById('cursor');
+orb.on('hover', e =>
+  cursorEl.textContent = e.lng == null ? 'off globe'
+    : `${e.lat >= 0 ? 'N' : 'S'} ${Math.abs(e.lat).toFixed(2)}°  ${e.lng >= 0 ? 'E' : 'W'} ${Math.abs(e.lng).toFixed(2)}°`);
+placePin();
 // Restyle in place — rewrites the per-feature style texture only, no re-tessellation.
 document.getElementById('recolor').onclick = ()=>{
   if(!layer) return;
