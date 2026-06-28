@@ -186,14 +186,19 @@ substrate from M2.
   - [x] `lines()` primitive over open polylines — done with M3 (thick AA strokes
         + slerp densification). Coastline overlay demo in the example.
   - [x] **`coastlines(opts)` / `borders(opts)` — CDN-backed, zero bundled data.**
-        One call: fetch Natural Earth GeoJSON (coastline / admin-0 boundary-lines)
-        from jsDelivr (pinned NE release; `baseUrl` overridable) → `geojsonLines()`
-        → `lines()`. `detail: 110m|50m|10m`. The library bundles **no** geo bytes
-        (decision §7). Demoed in the example (coastlines/borders toggles + detail).
-        Verified r5: default CDN + `baseUrl` override, coast/border line counts
-        match the binary converter, glError 0.
-  - [x] note: antimeridian-spanning countries (Russia, Fiji, US/Alaska) render
-        correctly with no unwrap — shown by `borders()`; that's the point of 3D.
+        One call: fetch Natural Earth GeoJSON from jsDelivr (pinned NE release;
+        `baseUrl` overridable) → `geojsonLines()` → `lines()`. `detail: 110m|50m|10m`,
+        no geo bytes bundled (decision §7). `coastlines()` = `coastline` lines;
+        `borders()` = **`admin_0_countries` polygons** drawn as ring outlines, so
+        borders read as complete country shapes alone (not just inter-country land
+        boundaries, which leave gaps at every coast). `geojsonLines()` flattens
+        LineString/MultiLineString **and** Polygon/MultiPolygon rings.
+  - [x] note: antimeridian/pole-spanning countries render correctly with no unwrap
+        — verified for `borders()` (admin_0_countries): Russia far-east / Pacific
+        clean; Antarctica is a full outline with only a tiny polygon-closure stub
+        at the dateline. That's the point of drawing in 3D.
+  - [x] demo: `examples/reference-detail.html` — single globe, coastlines/borders
+        toggles + 110m/50m/10m detail + view presets (Aegean/Britain/Europe/world).
   - [ ] more examples, README, `dist/` esbuild bundle, basic geometry unit tests
 - [ ] **M6 — `points()` primitive:** the third GeoJSON primitive. Screen-space
       quads/sprites at each feature's unit-sphere position; depth-

@@ -55,10 +55,13 @@ they fetch Natural Earth from a CDN (jsDelivr, pinned) and draw via `lines()`:
 
 ```js
 await orb.coastlines();                 // detail defaults to '50m'
-await orb.borders({ detail: '10m', color: '#c2185b' });
+await orb.borders({ detail: '10m', color: '#c2185b' });   // full country outlines
 ```
 
-`detail` is `'110m' | '50m' | '10m'`; both return a layer (`.remove()` to toggle).
+`coastlines()` draws Natural Earth coastlines; `borders()` draws admin-0 country
+*polygons* as outlines (complete country shapes, coast included). `detail` is
+`'110m' | '50m' | '10m'`; both return a layer (`.remove()` to toggle). See
+`examples/reference-detail.html` for a live detail comparison.
 Want it lighter or offline? Pass `baseUrl` to self-hosted GeoJSON, or feed your own
 data straight to `orb.lines({ lnglat, starts, color, width })` — the renderer takes
 plain typed arrays, so the data source is entirely yours.

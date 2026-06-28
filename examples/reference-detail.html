@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ajglobe — coastline &amp; border detail</title>
+<style>
+  html,body{margin:0;height:100%;background:#fff;color:#333;
+    font:13px ui-monospace,Menlo,monospace;overflow:hidden}
+  /* canvas fills the viewport; the bar floats over it (like a HUD). Giving the
+     canvas an explicit width/height:100% is essential — sizing it only via
+     absolute insets makes its layout size chase canvas.width and blow up. */
+  #c{position:absolute;inset:0;width:100%;height:100%;display:block;
+    touch-action:none;cursor:grab}
+  #c:active{cursor:grabbing}
+  #bar{position:absolute;top:0;left:0;right:0;z-index:10;
+    display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:8px 14px;
+    background:rgba(255,255,255,0.92);border-bottom:1px solid #ececec}
+  #bar b{font-weight:700}
+  .sep{color:#b9b9b9;margin:0 1px}
+  button{font:inherit;border:1px solid #dcdcdc;background:#f7f7f7;border-radius:6px;
+    padding:4px 10px;cursor:pointer;color:#333}
+  button.on{background:#111;color:#fff;border-color:#111}
+  #status{margin-left:auto;color:#999}
+</style>
+</head>
+<body>
+<div id="bar">
+  <b>ajglobe</b> <span class="sep">·</span>
+  <button id="coast" class="on">coastlines</button><button id="border">borders</button>
+  <span class="sep">detail</span>
+  <button data-d="110m">110m</button><button data-d="50m" class="on">50m</button><button data-d="10m">10m</button>
+  <span class="sep">view</span>
+  <button data-go="aegean">Aegean</button><button data-go="britain">Britain</button><button data-go="europe">Europe</button><button data-go="world">world</button>
+  <span id="status">…</span>
+</div>
+<canvas id="c"></canvas>
+
+<script type="module">
+import { Orb } from '../src/orb.js';
+
+const orb = new Orb(document.getElementById('c'), { background: '#ffffff', sphere: '#e6ebf0' });
+window.orb = orb;   // handy for the console
+const status = document.getElementById('status');
+
+// view presets: [ [lng,lat], zoom ]
+const views = {
+  aegean:  [[24, 38], 6],
+  britain: [[-3, 55], 5],
+  europe:  [[15, 50], 3],
+  world:   [[10, 25], 1],
+};
+const goTo = (v) => { const [ll, z] = views[v]; orb.cam.zoom = z; orb.lookAt(...ll); };
+goTo('aegean');
+
+let detail = '50m';
+const layer = { coast: null, border: null };
+const style = { coast: { color: '#111111', width: 1.6 }, border: { color: '#c2185b', width: 1.4 } };
+const fetchFn = { coast: (o) => orb.coastlines(o), border: (o) => orb.borders(o) };
+
+function report(){
+  status.textContent = `detail ${detail} · `
+    + ['coast', 'border'].filter(k => layer[k]).map(k => `${k} ${layer[k].nLines.toLocaleString()}`).join(' · ')
+    || `detail ${detail}`;
+}
+async function draw(kind){           // (re)load one layer at the current detail
+  if(layer[kind]) layer[kind].remove();
+  status.textContent = `loading ${kind} ${detail}…`;
+  layer[kind] = await fetchFn[kind]({ detail, ...style[kind] });
+  report();
+}
+
+for(const kind of ['coast', 'border']) document.getElementById(kind).onclick = async (e)=>{
+  if(layer[kind]){ layer[kind].remove(); layer[kind] = null; e.target.classList.remove('on'); report(); return; }
+  e.target.classList.add('on');
+  await draw(kind);
+};
+document.querySelectorAll('[data-d]').forEach(b => b.onclick = async ()=>{
+  detail = b.dataset.d;
+  document.querySelectorAll('[data-d]').forEach(x => x.classList.toggle('on', x === b));
+  for(const kind of ['coast', 'border']) if(layer[kind]) await draw(kind);   // reload what's on
+});
+document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => goTo(b.dataset.go));
+
+draw('coast');   // start with coastlines on
+</script>
+</body>
+</html>
