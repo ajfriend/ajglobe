@@ -13,6 +13,7 @@
   #c{position:absolute;inset:0;width:100%;height:100%;display:block;
     touch-action:none;cursor:grab}
   #c:active{cursor:grabbing}
+  #c:focus{outline:none}
   #bar{position:absolute;top:0;left:0;right:0;z-index:10;
     display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:8px 14px;
     background:rgba(255,255,255,0.92);border-bottom:1px solid #ececec}
@@ -52,6 +53,11 @@ const views = {
 };
 const goTo = (v) => { const [ll, z] = views[v]; orb.cam.zoom = z; orb.lookAt(...ll); };
 goTo('aegean');
+
+// Keyboard rotation (arrows / WASD / QE) is scoped to the focused canvas — focus it
+// on load, and send focus back after toolbar clicks so the keys keep working.
+orb.canvas.focus();
+document.getElementById('bar').addEventListener('click', () => orb.canvas.focus());
 
 let detail = '50m';
 const layer = { coast: null, border: null };

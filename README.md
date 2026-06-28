@@ -31,8 +31,12 @@ r5 (168k) and r6 (1.18M) — the pole cell fills, the antimeridian is clean.
 
 Since then: per-feature styling + opacity, `project`/`unproject` + hover/click
 events, thick AA great-circle strokes (`lines()`), GPU hover picking, `snapshot()`
-PNG export, `coastlines()`/`borders()`, and `destroy()`. Next: `points()`, a
-`dist/` bundle, and unit tests. See [PLAN.md](PLAN.md).
+PNG export, `coastlines()`/`borders()`, keyboard rotation, and `destroy()`. Next:
+`points()`, a `dist/` bundle, and unit tests. See [PLAN.md](PLAN.md).
+
+**Controls:** drag to rotate, scroll to zoom. With the globe focused (click it),
+the keyboard rotates too — arrows / `WASD` tilt and spin, `Q`/`E` (and `←`/`→`)
+roll, `Shift` for a bigger step.
 
 ## Use
 

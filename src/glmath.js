@@ -55,6 +55,11 @@ export function vec3ToLngLat(v) {
 
 export const quat = {
   identity: () => [0, 0, 0, 1],
+  // Rotation of `angle` radians about a (unit-normalized) axis.
+  fromAxisAngle(axis, angle) {
+    const a = vec3.norm(axis), s = Math.sin(angle / 2);
+    return [a[0] * s, a[1] * s, a[2] * s, Math.cos(angle / 2)];
+  },
   // Shortest-arc rotation taking unit vector a onto unit vector b.
   fromUnitVectors(a, b) {
     let d = vec3.dot(a, b);

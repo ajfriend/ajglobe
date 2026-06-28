@@ -32,7 +32,9 @@ Verified in-browser on an M3 against every ivea7h cell:
 - r6 (1,176,492 cells / 7.06M verts): builds ~385 ms, **60 FPS** (16.7 ms median).
 - The **pole cell fills** (deck.gl left a hole there) — zero special-casing.
 - Antimeridian clean at all orientations.
-- Direct arcball drag + scroll zoom. (Inertia fling removed — see §8.)
+- Direct arcball drag + scroll zoom + keyboard rotation (arrows/WASD tilt+spin,
+  Q/E + ←/→ roll, Shift = bigger step; scoped to the focused canvas). (Inertia
+  fling removed — see §8.)
 
 Not yet committed to git (waiting on the go-ahead).
 
@@ -58,7 +60,8 @@ cost argument: §4 / §7.)
 **The library owns** (all coupled to render/projection math; "solve it once"):
 - Layers of primitives: `points()`, `lines()`, `polygons()`, plus
   `layer.update({style})` / `layer.remove()`. Style is per-feature.
-- Camera: `lookAt()`, get/set `rotation`/`zoom`, arcball drag + wheel zoom.
+- Camera: `lookAt()`, get/set `rotation`/`zoom`, arcball drag + wheel zoom +
+  keyboard rotation (canvas-scoped).
 - Interaction *results* as events: `on('hover'|'click', (i, {lng,lat}) => …)`,
   `on('viewchange', …)`.
 - Coordinate helpers: `project(lng,lat) → {x,y,visible}`,

@@ -9,6 +9,7 @@
     font:13px ui-monospace,Menlo,monospace;color:#9aa7b4;}
   #c{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab;touch-action:none;}
   #c:active{cursor:grabbing;}
+  #c:focus{outline:none;}
   #hud{position:absolute;top:14px;left:16px;z-index:10;background:#0b0e13cc;
     border:1px solid #2a323d;border-radius:8px;padding:10px 13px;line-height:1.7;}
   #hud b{color:#e6edf3;}
@@ -56,6 +57,10 @@ function viridis(t){
 function bisect(arr, x){ let lo=0, hi=arr.length; while(lo<hi){const m=(lo+hi)>>1; if(arr[m]<x)lo=m+1; else hi=m;} return lo; }
 
 const orb = new Orb(document.getElementById('c'), { background:'#ffffff', sphere:'#e0e6ed' });
+// Keyboard rotation (arrows/WASD/QE) is scoped to the focused canvas: focus on load,
+// and refocus after HUD clicks so the keys keep working.
+orb.canvas.focus();
+document.getElementById('hud').addEventListener('click', () => orb.canvas.focus());
 window.orb = orb;   // handy for the console / benchmarking
 orb.lookAt(180, 25);
 
@@ -93,7 +98,7 @@ async function show(res){
   const s = orb.stats;
   document.getElementById('status').innerHTML =
     `<b>${s.cells.toLocaleString()}</b> cells · <b>${s.verts.toLocaleString()}</b> verts · `
-    + `built in <b>${buildMs} ms</b> · drag to rotate · scroll to zoom`;
+    + `built in <b>${buildMs} ms</b> · drag or arrows/WASD to rotate · scroll to zoom`;
 }
 
 for(const r of [1,2,3,5,6]) document.getElementById('r'+r).onclick = (e)=>{

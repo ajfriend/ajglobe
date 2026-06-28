@@ -4,6 +4,18 @@
 
 import { vec3, quat, mat4, lnglatToVec3, vec3ToLngLat } from './glmath.js';
 
+// Keyboard rotation map: e.code -> [axis x, y, z, sign], a rotation axis in the
+// screen-aligned world frame (pre-multiplied like the drag). Mirrors the
+// geojson_viz tool — arrows + WASD + QE: Up/Down+W/S tilt (latitude), A/D spin
+// (longitude), Left/Right+Q/E roll about the view axis.
+const KEY_AXIS = {
+  ArrowUp: [0, 1, 0, 1], KeyW: [0, 1, 0, 1],      // tilt toward the north
+  ArrowDown: [0, 1, 0, -1], KeyS: [0, 1, 0, -1],  // tilt toward the south
+  KeyA: [1, 0, 0, -1], KeyD: [1, 0, 0, 1],        // spin (longitude)
+  ArrowLeft: [0, 0, 1, 1], KeyQ: [0, 0, 1, 1],    // roll
+  ArrowRight: [0, 0, 1, -1], KeyE: [0, 0, 1, -1],
+};
+
 export class Camera {
   constructor(canvas, onChange, signal) {
     this.canvas = canvas;
@@ -57,6 +69,20 @@ export class Camera {
       this.zoom = Math.max(0.3, Math.min(50, this.zoom * Math.exp(-e.deltaY * 0.001)));
       this.onChange();
     }, { passive: false, signal });
+    // Keyboard rotation, scoped to the (focusable) canvas so it never hijacks the
+    // host page's keys. Up/Down + W/S tilt (screen X), A/D spin (screen Y),
+    // Left/Right + Q/E roll (screen Z). Step 10°, 30° with Shift. Each is a
+    // world-frame (screen-aligned) rotation, pre-multiplied like the drag.
+    if (c.tabIndex < 0) c.tabIndex = 0;
+    c.addEventListener('keydown', (e) => {
+      const ax = KEY_AXIS[e.code];
+      if (!ax) return;
+      e.preventDefault();
+      const ang = ax[3] * (e.shiftKey ? 30 : 10) * Math.PI / 180;
+      const delta = quat.fromAxisAngle([ax[0], ax[1], ax[2]], ang);
+      this.q = quat.normalize(quat.multiply(delta, this.q));
+      this.onChange();
+    }, { signal });
   }
 
   // Point the camera at a given lng/lat (animation-free; sets orientation).
