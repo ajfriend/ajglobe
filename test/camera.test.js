@@ -4,12 +4,13 @@ import assert from 'node:assert/strict';
 import { Camera } from '../src/camera.js';
 import { vec3, lnglatToVec3 } from '../src/glmath.js';
 
-// Minimal canvas the Camera needs: a bounding rect + no-op listeners + tabIndex.
+// Stub only what Camera actually touches: a bounding rect, addEventListener +
+// setPointerCapture (from _attach), and a settable tabIndex.
 function stubCanvas(w = 800, h = 600) {
   return {
-    width: w, height: h, clientWidth: w, clientHeight: h, tabIndex: -1,
+    tabIndex: -1,
     getBoundingClientRect: () => ({ width: w, height: h, left: 0, top: 0, right: w, bottom: h }),
-    addEventListener() {}, removeEventListener() {}, setPointerCapture() {},
+    addEventListener() {}, setPointerCapture() {},
   };
 }
 const newCam = () => new Camera(stubCanvas(), () => {}, new AbortController().signal);

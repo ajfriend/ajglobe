@@ -235,6 +235,8 @@ export function geojsonLines(gj) {
 // (pay-per-use — the core ships no dependency). It un-cuts the antimeridian/polar
 // splits that GeoJSON polygons carry for 2D validity (Russia, Antarctica), turning
 // them back into proper spherical rings — which is what we draw. Cached after load.
+// NB: this https import stays external in the dist build (package.json build's
+// `--external:https://*`) so d3-geo is never bundled; revisit that flag if it moves.
 let _stitch;
 async function loadStitch() {
   if (!_stitch) _stitch = (await import('https://cdn.jsdelivr.net/npm/d3-geo-projection@4/+esm')).geoStitch;

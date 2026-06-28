@@ -29,7 +29,6 @@ test('geojsonLines flattens lines + polygon rings, skips null geometry', () => {
     0, 0, 1, 0, 0, 0,       // MultiPolygon[0] ring
     5, 5, 6, 5, 6, 6, 5, 5, // MultiPolygon[1] ring
   ];
-  assert.equal(lnglat.length, expected.length);
   assert.deepEqual(Array.from(lnglat), expected);
   assert.ok(lnglat instanceof Float32Array && starts instanceof Uint32Array);
 });
