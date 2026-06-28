@@ -12,7 +12,7 @@
 // in a per-feature texture sampled by id, so a restyle (layer.update) touches
 // nFeatures texels, never the geometry. (Thick strokes, picking, lines come next.)
 
-import { lnglatToVec3Into } from './glmath.js';
+import { lnglatToVec3, lnglatToVec3Into, vec3 } from './glmath.js';
 import { Camera } from './camera.js';
 
 function compile(gl, type, src) {
@@ -71,6 +71,45 @@ in vec3 a_pos;
 uniform mat4 u_mvp;
 void main() { gl_Position = u_mvp * vec4(a_pos, 1.0); }`;
 
+// Thick AA strokes: expand each segment to a screen-space quad of constant pixel
+// width. Project both endpoints, take the screen-space perpendicular, and offset
+// this vertex by side * (halfWidth + 1px AA pad). v_dist carries the signed pixel
+// distance from the centerline so the fragment shader can feather the edges.
+const STROKE_VS = `#version 300 es
+in vec3 a_pA;
+in vec3 a_pB;
+in vec2 a_param;            // x: end (0=A, 1=B), y: side (-1/+1)
+uniform mat4 u_mvp;
+uniform vec2 u_viewport;    // device px
+uniform float u_hw;         // stroke half-width, device px
+out float v_dist;
+void main() {
+  vec4 ca = u_mvp * vec4(a_pA, 1.0);
+  vec4 cb = u_mvp * vec4(a_pB, 1.0);
+  vec2 sa = ca.xy / ca.w * u_viewport * 0.5;
+  vec2 sb = cb.xy / cb.w * u_viewport * 0.5;
+  vec2 dir = sb - sa;
+  float len = length(dir);
+  vec2 nrm = len > 1e-5 ? vec2(-dir.y, dir.x) / len : vec2(0.0);
+  vec4 clip = a_param.x < 0.5 ? ca : cb;
+  float w = u_hw + 1.0;     // +1px so the AA ramp has room
+  clip.xy += (nrm * a_param.y * w) / (u_viewport * 0.5) * clip.w;
+  gl_Position = clip;
+  v_dist = a_param.y * w;
+}`;
+
+const STROKE_FS = `#version 300 es
+precision highp float;
+uniform vec4 u_color;
+uniform float u_hw;
+in float v_dist;
+out vec4 o_color;
+void main() {
+  float cov = clamp(u_hw + 0.5 - abs(v_dist), 0.0, 1.0);   // 1px edge feather
+  if (cov <= 0.0) discard;
+  o_color = vec4(u_color.rgb, u_color.a * cov);
+}`;
+
 function hexRGBA(c) {
   if (Array.isArray(c)) return c.length === 4 ? c : [...c, 255];
   const h = c.replace('#', '');
@@ -109,6 +148,7 @@ export class Orb {
 
     this.fillProg = program(gl, FILL_VS, FILL_FS);
     this.sphereProg = program(gl, SPHERE_VS, SPHERE_FS);
+    this.strokeProg = program(gl, STROKE_VS, STROKE_FS);
     // Uniform locations are fixed after link — resolve once, not per frame.
     this.fillU = {
       mvp: gl.getUniformLocation(this.fillProg, 'u_mvp'),
@@ -119,6 +159,13 @@ export class Orb {
       mvp: gl.getUniformLocation(this.sphereProg, 'u_mvp'),
       color: gl.getUniformLocation(this.sphereProg, 'u_color'),
     };
+    this.strokeU = {
+      mvp: gl.getUniformLocation(this.strokeProg, 'u_mvp'),
+      viewport: gl.getUniformLocation(this.strokeProg, 'u_viewport'),
+      hw: gl.getUniformLocation(this.strokeProg, 'u_hw'),
+      color: gl.getUniformLocation(this.strokeProg, 'u_color'),
+    };
+    this.dpr = 1;
     this._buildSphere();
 
     this.layers = [];
@@ -356,46 +403,67 @@ export class Orb {
     return layer;
   }
 
-  // Add a polyline layer drawn as thin GL_LINES (SPIKE — thick AA strokes and
-  // great-circle densification are M3/M5). Reuses the sphere program. Vertices
-  // ride at radius ~1.0015 so lines sit just above fills yet still depth-test
-  // against the sphere (back-hemisphere lines hidden). Drawn in 3D, so the
-  // antimeridian is just adjacent points on the sphere — no unwrap.
-  //   xyz | lnglat : Float32Array positions (3/vertex or 2/vertex)
+  // Add a polyline layer drawn as thick, antialiased great-circle strokes (M3).
+  // Each segment is expanded to a screen-space quad of constant pixel width with
+  // edges feathered for AA (see STROKE_VS/FS), and long segments are slerp-
+  // densified so the stroke follows the great-circle arc. Strokes ride at radius
+  // ~1.0015 so they sit just above fills but still depth-test against the sphere
+  // (back-hemisphere strokes hidden). Coordinate-free: drawn in 3D, so the
+  // antimeridian is just adjacent points on the sphere — no unwrap, no seam.
+  //   xyz | lnglat : Float32Array positions (3/vertex unit xyz, or 2/vertex lng,lat)
   //   starts       : Uint32Array polyline start indices (len = nLines + 1)
   //   color        : '#rrggbb' | [r,g,b,a]
-  lines({ xyz, lnglat, starts, color = '#ffffff' }) {
+  //   width        : stroke width in CSS pixels (default 1.5)
+  lines({ xyz, lnglat, starts, color = '#ffffff', width = 1.5 }) {
     const gl = this.gl;
     const nLines = starts.length - 1;
-    const nVerts = xyz ? xyz.length / 3 : lnglat.length / 2;
-    const R = 1.0015;
+    const R = 1.0015;                            // lift above the fills
+    const MAX_SEG = 0.05;                         // rad; densify long edges into arcs
+    const vec = (i) => (xyz
+      ? [xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2]]
+      : lnglatToVec3(lnglat[i * 2], lnglat[i * 2 + 1]));
 
-    const pos = new Float32Array(nVerts * 3);
-    for (let v = 0; v < nVerts; v++) {
-      if (xyz) { pos[v * 3] = xyz[v * 3]; pos[v * 3 + 1] = xyz[v * 3 + 1]; pos[v * 3 + 2] = xyz[v * 3 + 2]; }
-      else lnglatToVec3Into(pos, v * 3, lnglat[v * 2], lnglat[v * 2 + 1]);
-      pos[v * 3] *= R; pos[v * 3 + 1] *= R; pos[v * 3 + 2] *= R;
-    }
-
-    // GL_LINES index: each polyline [s,e) becomes its (j, j+1) segments.
-    let segs = 0;
-    for (let l = 0; l < nLines; l++) segs += Math.max(0, starts[l + 1] - starts[l] - 1);
-    const idx = new Uint32Array(segs * 2);
-    let t = 0;
+    // Per segment, 4 verts carrying both endpoints (a_pA, a_pB) + (end, side); the
+    // vertex shader does the screen-space offset, so geometry is view-independent.
+    const PA = [], PB = [], PRM = [], IDX = [];
+    let base = 0;
     for (let l = 0; l < nLines; l++) {
-      for (let j = starts[l], e = starts[l + 1]; j < e - 1; j++) { idx[t++] = j; idx[t++] = j + 1; }
+      const s = starts[l], e = starts[l + 1];
+      if (e - s < 2) continue;
+      // densify the polyline by slerp so each drawn segment reads as a geodesic arc
+      let prev = vec(s);
+      const dense = [prev];
+      for (let i = s + 1; i < e; i++) {
+        const cur = vec(i);
+        const n = Math.max(1, Math.ceil(vec3.angle(prev, cur) / MAX_SEG));
+        for (let k = 1; k <= n; k++) dense.push(vec3.slerp(prev, cur, k / n));
+        prev = cur;
+      }
+      for (let i = 0; i + 1 < dense.length; i++) {
+        const a = dense[i], b = dense[i + 1];
+        const ax = a[0] * R, ay = a[1] * R, az = a[2] * R;
+        const bx = b[0] * R, by = b[1] * R, bz = b[2] * R;
+        for (let q = 0; q < 4; q++) { PA.push(ax, ay, az); PB.push(bx, by, bz); }
+        PRM.push(0, -1, 0, 1, 1, -1, 1, 1);
+        IDX.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
+        base += 4;
+      }
     }
 
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
-    const pb = this._attrib(this.sphereProg, 'a_pos', pos, 3);
-    const ib = this._elements(idx);
+    const pa = this._attrib(this.strokeProg, 'a_pA', new Float32Array(PA), 3);
+    const pb = this._attrib(this.strokeProg, 'a_pB', new Float32Array(PB), 3);
+    const pm = this._attrib(this.strokeProg, 'a_param', new Float32Array(PRM), 2);
+    const ib = this._elements(new Uint32Array(IDX));
     gl.bindVertexArray(null);
 
-    const col = hexRGBA(color).map((x) => x / 255);
-    const layer = { vao, count: idx.length, nLines, nVerts, color: col, _buffers: [pb, ib] };
+    const layer = {
+      vao, count: IDX.length, nLines, width,
+      color: hexRGBA(color).map((x) => x / 255), _buffers: [pa, pb, pm, ib],
+    };
     layer.remove = () => {
-      this.lineLayers = this.lineLayers.filter((l) => l !== layer);
+      this.lineLayers = this.lineLayers.filter((x) => x !== layer);
       gl.deleteVertexArray(vao);
       layer._buffers.forEach((b) => gl.deleteBuffer(b));
       this._dirty = true;
@@ -437,6 +505,7 @@ export class Orb {
 
   _resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.dpr = dpr;
     const w = Math.round(this.canvas.clientWidth * dpr);
     const h = Math.round(this.canvas.clientHeight * dpr);
     if (this.canvas.width !== w || this.canvas.height !== h) {
@@ -473,15 +542,20 @@ export class Orb {
       gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
     }
 
-    // 3) line overlays (thin GL_LINES; reuse the sphere program for flat color)
+    // 3) thick AA stroke overlays (screen-space quads). Depth-test against the
+    // sphere (back hidden) but don't write depth — strokes are a pure overlay.
     if (this.lineLayers.length) {
-      gl.useProgram(this.sphereProg);
-      gl.uniformMatrix4fv(this.sphereU.mvp, false, mvp);
+      gl.useProgram(this.strokeProg);
+      gl.uniformMatrix4fv(this.strokeU.mvp, false, mvp);
+      gl.uniform2f(this.strokeU.viewport, this.canvas.width, this.canvas.height);
+      gl.depthMask(false);
       for (const l of this.lineLayers) {
-        gl.uniform4f(this.sphereU.color, l.color[0], l.color[1], l.color[2], l.color[3]);
+        gl.uniform4f(this.strokeU.color, l.color[0], l.color[1], l.color[2], l.color[3]);
+        gl.uniform1f(this.strokeU.hw, l.width * this.dpr * 0.5);
         gl.bindVertexArray(l.vao);
-        gl.drawElements(gl.LINES, l.count, gl.UNSIGNED_INT, 0);
+        gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
       }
+      gl.depthMask(true);
     }
     gl.bindVertexArray(null);
   }

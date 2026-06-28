@@ -14,6 +14,16 @@ export const vec3 = {
     const l = Math.hypot(a[0], a[1], a[2]) || 1;
     return [a[0] / l, a[1] / l, a[2] / l];
   },
+  // Angle (radians) between two unit vectors.
+  angle: (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))),
+  // Spherical lerp of two unit vectors — the great-circle midpoint family. Stays
+  // on the sphere, so it densifies an edge into a geodesic arc (seam/pole-safe).
+  slerp(a, b, t) {
+    const om = vec3.angle(a, b);
+    if (om < 1e-6) return [a[0], a[1], a[2]];
+    const so = Math.sin(om), c0 = Math.sin((1 - t) * om) / so, c1 = Math.sin(t * om) / so;
+    return [a[0] * c0 + b[0] * c1, a[1] * c0 + b[1] * c1, a[2] * c0 + b[2] * c1];
+  },
 };
 
 // (lng, lat) degrees -> unit vector, written into out[off..off+2]. z = north

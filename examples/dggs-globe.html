@@ -115,7 +115,7 @@ document.getElementById('coast').onclick = async (e)=>{
     ]);
     coastData = { pos, starts };
   }
-  coast = orb.lines({ lnglat: coastData.pos, starts: coastData.starts, color: '#e6edf3' });
+  coast = orb.lines({ lnglat: coastData.pos, starts: coastData.starts, color: '#e6edf3', width: 2 });
   e.target.classList.add('on');
 };
 

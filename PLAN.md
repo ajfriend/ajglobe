@@ -147,14 +147,19 @@ substrate from M2.
         flat fast path untouched (build still ~382 ms / 7.06M verts). Verified on
         ivea7h r2 (492 cells → 14,676 verts, full coverage, no sag holes).
   - [ ] document `xyz` vs `lnglat` input (README/JSDoc — deferred to M5 polish)
-- [ ] **M3 — thick AA strokes** (polygon outlines / any open or closed path):
-      screen-space line quads, variable width, edge-alpha AA. Consumes the
-      geodesic-path substrate (§4/§7) for arc densification; shared by `lines()` (M5).
+- [x] **M3 — thick AA strokes** (any open or closed path) — `lines()` expands
+      each segment to a screen-space quad of constant pixel width; the fragment
+      shader feathers the edges (1px alpha ramp) for AA at any width/angle/zoom.
+      Long segments are slerp-densified (geodesic-path substrate, §4/§7) so they
+      follow the great circle. Depth-tested overlay (depth-write off). Verified:
+      width 2↔6 px, AA edges, 90° edge → 32 arc segments, back hemisphere hidden.
+      *Deferred:* round/miter joins (shallow densified corners look fine); per-
+      feature width/color (one color+width per layer for now).
 - [ ] **M4 — GPU hover picking:** offscreen id-color FBO + readPixels → feature
       index; wires into `on('hover'/'click')`
 - [ ] **M5 — reference-geometry helpers + polish**
-  - [ ] `lines()` primitive over open polylines (geodesic-path substrate §4/§7 for
-        great-circle arcs; thick AA reuses M3)
+  - [x] `lines()` primitive over open polylines — done with M3 (thick AA strokes
+        + slerp densification). Coastline overlay demo in the example.
   - [ ] bundled low-res assets: **coastlines** and **country borders** (Natural
         Earth admin-0), vendored as compact binary (same `pos/idx` layout as the
         cell data) so they load instantly with no GeoJSON parse
