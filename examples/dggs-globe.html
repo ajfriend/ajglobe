@@ -27,11 +27,11 @@
 <div id="hud">
   <b>ajglobe</b> · ivea7h every cell
   <span style="margin-left:6px">
-    <button id="r5" class="on">r5</button><button id="r6">r6</button>
+    <button id="r1">r1</button><button id="r2">r2</button><button id="r3">r3</button><button id="r5" class="on">r5</button><button id="r6">r6</button>
   </span>
   <span style="margin-left:6px">
     <button id="np">north pole</button><button id="am">antimeridian</button>
-    <button id="recolor">recolor</button><button id="coast">coastlines</button>
+    <button id="recolor">recolor</button><button id="fade">fade</button><button id="coast">coastlines</button>
   </span>
   <span id="status">loading…</span>
   <span id="cursor" style="display:block;margin-top:4px;color:#7d8b99">move over the globe…</span>
@@ -57,14 +57,17 @@ orb.lookAt(180, 25);
 const cache = new Map();
 async function bin(name, Ctor){ const b = await fetch(`data/${name}`).then(r=>{if(!r.ok)throw new Error(name+' '+r.status);return r.arrayBuffer();}); return new Ctor(b); }
 
-let layer = null, cur = null, flip = false;
+let layer = null, cur = null, flip = false, alpha = 255;
 // Color a feature by its aspect-ratio percentile (viridis); `flip` reverses the
-// ramp so `recolor` has a visible effect through layer.update().
+// ramp (recolor) and `alpha` is the per-feature opacity (fade) — both applied via
+// layer.update() with no re-tessellation.
 function paint(i){
   const a = cur.ar[i];
-  if(!Number.isFinite(a)) return [68,68,68,255];
+  if(!Number.isFinite(a)) return [68, 68, 68, alpha];
   const t = bisect(cur.sorted, a) / (cur.sorted.length - 1);
-  return viridis(flip ? 1 - t : t);
+  const c = viridis(flip ? 1 - t : t);
+  c[3] = alpha;
+  return c;
 }
 async function show(res){
   document.getElementById('status').textContent = `loading r${res}…`;
@@ -88,9 +91,16 @@ async function show(res){
     + `built in <b>${buildMs} ms</b> · drag to rotate · scroll to zoom`;
 }
 
-for(const r of [5,6]) document.getElementById('r'+r).onclick = (e)=>{
-  document.querySelectorAll('#r5,#r6').forEach(b=>b.classList.toggle('on', b===e.target));
+for(const r of [1,2,3,5,6]) document.getElementById('r'+r).onclick = (e)=>{
+  document.querySelectorAll('#r1,#r2,#r3,#r5,#r6').forEach(b=>b.classList.toggle('on', b===e.target));
   show(r);
+};
+// Per-feature opacity: fade toggles cell alpha and restyles in place (no re-tessellation).
+document.getElementById('fade').onclick = (e)=>{
+  if(!layer) return;
+  alpha = alpha === 255 ? 110 : 255;
+  e.target.classList.toggle('on', alpha !== 255);
+  layer.update({ fill: paint });
 };
 document.getElementById('np').onclick = ()=>orb.lookAt(0,90);
 document.getElementById('am').onclick = ()=>orb.lookAt(180,0);

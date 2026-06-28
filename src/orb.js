@@ -131,6 +131,10 @@ export class Orb {
 
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
+    // Per-feature opacity: fill's alpha rides in the style texture; blend it over
+    // the depth sphere. Cells don't overlap, so straight alpha needs no sorting.
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.clearColor(...this.bg);
 
     this._resize();
@@ -196,6 +200,37 @@ export class Orb {
     return tex;
   }
 
+  // Subdivide one fan triangle (vertex indices ia,ib,ic into P) onto the sphere
+  // when it is coarse enough to sag below the depth sphere; append the new verts
+  // to P (positions) and F (feature ids) and push triangles to I. Small triangles
+  // emit unchanged (no new verts). Subdivision is uniform per triangle, so very
+  // coarse neighbours can leave hairline T-junctions — fine for reference fills.
+  _fanTri(P, F, I, fid, ia, ib, ic) {
+    const ax = P[ia * 3], ay = P[ia * 3 + 1], az = P[ia * 3 + 2];
+    const bx = P[ib * 3], by = P[ib * 3 + 1], bz = P[ib * 3 + 2];
+    const cx = P[ic * 3], cy = P[ic * 3 + 1], cz = P[ic * 3 + 2];
+    const ang = (ux, uy, uz, vx, vy, vz) => Math.acos(Math.max(-1, Math.min(1, ux * vx + uy * vy + uz * vz)));
+    const maxA = Math.max(ang(ax, ay, az, bx, by, bz), ang(bx, by, bz, cx, cy, cz), ang(ax, ay, az, cx, cy, cz));
+    const L = Math.max(1, Math.ceil(maxA / 0.12));
+    if (L === 1) { I.push(ia, ib, ic); return; }
+    const base = P.length / 3;
+    const at = (i, k) => base + (i * (i + 1) / 2 + k);    // index of lattice point (i,k)
+    for (let i = 0; i <= L; i++) {
+      for (let k = 0; k <= i; k++) {
+        const u = (L - i) / L, v = (i - k) / L, w = k / L;  // barycentric over a,b,c
+        const x = ax * u + bx * v + cx * w, y = ay * u + by * v + cy * w, z = az * u + bz * v + cz * w;
+        const inv = 1 / Math.hypot(x, y, z);                // project onto the unit sphere
+        P.push(x * inv, y * inv, z * inv); F.push(fid);
+      }
+    }
+    for (let i = 0; i < L; i++) {
+      for (let k = 0; k <= i; k++) {
+        I.push(at(i, k), at(i + 1, k), at(i + 1, k + 1));
+        if (k < i) I.push(at(i, k), at(i + 1, k + 1), at(i, k + 1));
+      }
+    }
+  }
+
   _buildSphere() {
     const gl = this.gl;
     // Slightly inside the unit sphere so cells (at r=1) always sit in front of it
@@ -218,7 +253,7 @@ export class Orb {
   polygons({ xyz, lnglat, starts, fill }) {
     const gl = this.gl;
     const nCells = starts.length - 1;
-    const nVerts = xyz ? xyz.length / 3 : lnglat.length / 2;
+    let nVerts = xyz ? xyz.length / 3 : lnglat.length / 2;
 
     // positions -> unit-sphere xyz
     let pos;
@@ -235,23 +270,48 @@ export class Orb {
     // here — it lives in a per-feature texture sampled by id (built below), so a
     // restyle rewrites nFeatures texels and never touches this geometry. All verts
     // of a cell's fan share its id, so the fragment shader reads it 'flat'.
-    const fids = new Uint32Array(nVerts);
-    let triCount = 0;
+    //
+    // The same pass flags any cell coarse enough that flat fan triangles would
+    // chord below the depth sphere (radius 0.998) and get occluded (§8). Gate on
+    // the apex-spoke angle: a ring edge is <= 2x a spoke, so spoke < 0.06 rad
+    // keeps every fan edge < 0.12 rad (chord sag < 0.002). r5/r6 cells (~1°) never
+    // trip it, so their fast path stays as-is.
+    const COS_GATE = Math.cos(0.06);
+    let fids = new Uint32Array(nVerts);
+    let triCount = 0, anyLarge = false;
     for (let c = 0; c < nCells; c++) {
       const s = starts[c], e = starts[c + 1], k = e - s;
-      for (let v = s; v < e; v++) fids[v] = c;
+      const ax = pos[s * 3], ay = pos[s * 3 + 1], az = pos[s * 3 + 2];
+      for (let v = s; v < e; v++) {
+        fids[v] = c;
+        if (ax * pos[v * 3] + ay * pos[v * 3 + 1] + az * pos[v * 3 + 2] < COS_GATE) anyLarge = true;
+      }
       if (k >= 3) triCount += k - 2;
     }
 
-    // fan triangulation by TOPOLOGY (indices only — coordinate-free, so it is
-    // immune to the antimeridian/pole; valid for convex rings): (s, j, j+1).
-    const idx = new Uint32Array(triCount * 3);
-    let t = 0;
-    for (let c = 0; c < nCells; c++) {
-      const s = starts[c], e = starts[c + 1];
-      for (let j = s + 1; j < e - 1; j++) {
-        idx[t++] = s; idx[t++] = j; idx[t++] = j + 1;
+    // Triangulate by ring TOPOLOGY — a fan (s, j, j+1), indices only, so it is
+    // coordinate-free and immune to the antimeridian/pole (valid for convex rings).
+    let idx;
+    if (!anyLarge) {
+      idx = new Uint32Array(triCount * 3);
+      let t = 0;
+      for (let c = 0; c < nCells; c++) {
+        const s = starts[c], e = starts[c + 1];
+        for (let j = s + 1; j < e - 1; j++) { idx[t++] = s; idx[t++] = j; idx[t++] = j + 1; }
       }
+    } else {
+      // Coarse cells present: subdivide their fan triangles and project the new
+      // vertices onto the sphere so the fill stays above the depth sphere. Small
+      // triangles still emit as one flat triangle, so only coarse cells grow.
+      const P = Array.from(pos), F = Array.from(fids), I = [];
+      for (let c = 0; c < nCells; c++) {
+        const s = starts[c], e = starts[c + 1];
+        for (let j = s + 1; j < e - 1; j++) this._fanTri(P, F, I, c, s, j, j + 1);
+      }
+      pos = new Float32Array(P);
+      fids = new Uint32Array(F);
+      idx = new Uint32Array(I);
+      nVerts = pos.length / 3;
     }
 
     // Per-feature style: one RGBA8 texel per feature, indexed by id (row-major in

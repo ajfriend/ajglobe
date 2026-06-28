@@ -124,7 +124,7 @@ substrate from M2.
 
 - [x] **M1 — spike:** fills + depth sphere + arcball + zoom; pole/antimeridian
       proven on ivea7h r5/r6 at 60 FPS. *(polygons primitive — fills)*
-- [ ] **M2 — core API + composition surface**
+- [x] **M2 — core API + composition surface** — done; verified headless on r1–r6.
   - [x] **per-feature style substrate** — `featureId` (uint) attribute + an RGBA8
         per-feature texture sampled in-shader by id (`texelFetch`, NEAREST). The
         foundation the next items + M4 picking all share; restyle rewrites
@@ -138,9 +138,15 @@ substrate from M2.
         reserved for M4 picking). Example: DOM pin via `project()` + cursor readout.
   - [x] `layer.update({fill})` — restyle without re-tessellating (rewrites the
         style texture via `texSubImage2D`; fill's alpha is carried per-feature)
-  - [ ] per-feature opacity; document `xyz` vs `lnglat` input
-  - [ ] large-cell fill subdivision (see §8) so coarse cells don't sink below the
-        depth sphere
+  - [x] per-feature opacity — alpha rides in the style texture; `gl.BLEND` with
+        straight alpha over the depth sphere (cells don't overlap → no sorting).
+        Verified: faded cell == cell·α + sphere·(1−α).
+  - [x] large-cell fill subdivision (§8) — fan triangles whose apex-spoke angle
+        trips a gate (>0.06 rad) are subdivided and the new verts projected onto
+        the sphere, so coarse cells stay above the depth sphere. r5/r6 keep the
+        flat fast path untouched (build still ~382 ms / 7.06M verts). Verified on
+        ivea7h r2 (492 cells → 14,676 verts, full coverage, no sag holes).
+  - [ ] document `xyz` vs `lnglat` input (README/JSDoc — deferred to M5 polish)
 - [ ] **M3 — thick AA strokes** (polygon outlines / any open or closed path):
       screen-space line quads, variable width, edge-alpha AA. Consumes the
       geodesic-path substrate (§4/§7) for arc densification; shared by `lines()` (M5).
@@ -217,11 +223,14 @@ substrate from M2.
   disorienting spin. Direct drag now (stops on release). A correct version must be
   **time-normalized** (angular velocity = Δangle/Δt, decay over a real time
   constant, capped, flick-threshold), and is deferred/opt-in.
-- **Large-cell fills can sink below the depth sphere.** Flat fan triangles chord
-  *inside* the unit sphere; sag ≈ 1−cos(θ/2). For r5/r6 cells (θ≈1°) sag ≪ the
-  0.002 sphere gap, so they're fine. Cells spanning ≳5° (coarse DGGS, continents)
-  will dip below radius 0.998 and get occluded → need fan-triangle subdivision +
-  re-projection to the sphere (planned in M2).
+- **Large-cell fills sinking below the depth sphere — FIXED in M2.** Flat fan
+  triangles chord *inside* the unit sphere; sag ≈ 1−cos(θ/2). r5/r6 cells (θ≈1°)
+  are fine; cells spanning ≳5° would dip below radius 0.998 and get occluded.
+  `polygons()` now gates on the apex-spoke angle (folded into the fid pass) and,
+  only when some cell trips it, subdivides those fan triangles and projects the
+  new verts onto the sphere. r5/r6 stay on the flat fast path (build ~382 ms,
+  unchanged). *Remaining limitation:* subdivision is uniform per triangle, so very
+  coarse neighbours can leave hairline T-junctions (cosmetic; fine for fills).
 - **Convex-only fills.** Topology fan assumes convexity (true for DGGS cells).
   Continents are **outline-only** (lines, no fill) so this isn't blocking;
   concave fills need spherical ear-clipping (later).
