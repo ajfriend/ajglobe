@@ -66,18 +66,9 @@ void main() {
   o_color = c;
 }`;
 
-// Picking: draw the fills but write each feature's id as a color into an offscreen
-// buffer (M4). id = featureId + u_idBase + 1, so 0 reads back as "nothing".
-const PICK_VS = `#version 300 es
-layout(location = 0) in vec3 a_pos;
-layout(location = 1) in uint a_featureId;
-uniform mat4 u_mvp;
-flat out uint v_fid;
-void main() {
-  v_fid = a_featureId;
-  gl_Position = u_mvp * vec4(a_pos, 1.0);
-}`;
-
+// Picking: draw the fills (reusing FILL_VS for the vertex stage) but write each
+// feature's id as a color into an offscreen buffer (M4). id = featureId + u_idBase
+// + 1, so 0 reads back as "nothing".
 const PICK_FS = `#version 300 es
 precision highp float;
 precision highp int;
@@ -179,7 +170,7 @@ export class Orb {
     this.fillProg = program(gl, FILL_VS, FILL_FS);
     this.sphereProg = program(gl, SPHERE_VS, SPHERE_FS);
     this.strokeProg = program(gl, STROKE_VS, STROKE_FS);
-    this.pickProg = program(gl, PICK_VS, PICK_FS);
+    this.pickProg = program(gl, FILL_VS, PICK_FS);   // same vertex stage as fills
     // Uniform locations are fixed after link — resolve once, not per frame.
     this.fillU = {
       mvp: gl.getUniformLocation(this.fillProg, 'u_mvp'),
@@ -205,12 +196,13 @@ export class Orb {
     this._hoverId = -1;        // feature to highlight in the fills (-1 = none)
     this._pick = null;         // offscreen id-buffer { fbo, tex, rbo, w, h }
     this._pickValid = false;   // stale when the view / layers / size change
+    this._pickPixel = new Uint8Array(4);   // reused readback scratch (per-pointer)
     this._buildSphere();
 
     this.layers = [];
     this.lineLayers = [];
     this._handlers = { hover: [], click: [], viewchange: [] };
-    this.cam = new Camera(canvas, () => { this._dirty = true; this._pickValid = false; this._emit('viewchange'); });
+    this.cam = new Camera(canvas, () => { this._invalidate(); this._emit('viewchange'); });
     this._dirty = true;
     canvas.addEventListener('pointermove', (e) => this._emitPointer('hover', e));
     canvas.addEventListener('click', (e) => this._emitPointer('click', e));
@@ -224,7 +216,7 @@ export class Orb {
     gl.clearColor(...this.bg);
 
     this._resize();
-    new ResizeObserver(() => { this._resize(); this._dirty = true; this._pickValid = false; }).observe(canvas);
+    new ResizeObserver(() => { this._resize(); this._invalidate(); }).observe(canvas);
     const loop = () => { this._frame(); requestAnimationFrame(loop); };
     requestAnimationFrame(loop);
   }
@@ -435,12 +427,10 @@ export class Orb {
       gl.deleteVertexArray(vao);
       layer._buffers.forEach((b) => gl.deleteBuffer(b));
       gl.deleteTexture(styleTex);
-      this._dirty = true;
-      this._pickValid = false;
+      this._invalidate();
     };
     this.layers.push(layer);
-    this._dirty = true;
-    this._pickValid = false;
+    this._invalidate();
     return layer;
   }
 
@@ -580,11 +570,7 @@ export class Orb {
     const dppx = this.canvas.clientHeight ? h / this.canvas.clientHeight : this.dpr;
 
     // 1) opaque background sphere (depth) -> hides the back hemisphere
-    gl.useProgram(this.sphereProg);
-    gl.uniformMatrix4fv(this.sphereU.mvp, false, mvp);
-    gl.uniform4f(this.sphereU.color, ...this.sphereColor, 1);
-    gl.bindVertexArray(this.sphereVAO);
-    gl.drawElements(gl.TRIANGLES, this.sphereCount, gl.UNSIGNED_INT, 0);
+    this._drawSphere(mvp, ...this.sphereColor, 1);
 
     // 2) polygon fills (depth-tested against the sphere). Color comes from each
     // layer's per-feature style texture, sampled by a_featureId.
@@ -618,6 +604,27 @@ export class Orb {
     gl.bindVertexArray(null);
   }
 
+  // Mark the rendered frame AND the pick id-buffer stale (they change together on
+  // any view/layer/size change). highlight() only sets _dirty — it doesn't move geometry.
+  _invalidate() { this._dirty = true; this._pickValid = false; }
+
+  // Draw the depth sphere with a given color (opaque body in the main view, id 0
+  // in the pick pass). Shared by _renderScene and _renderPickScene.
+  _drawSphere(mvp, r, g, b, a) {
+    const gl = this.gl;
+    gl.useProgram(this.sphereProg);
+    gl.uniformMatrix4fv(this.sphereU.mvp, false, mvp);
+    gl.uniform4f(this.sphereU.color, r, g, b, a);
+    gl.bindVertexArray(this.sphereVAO);
+    gl.drawElements(gl.TRIANGLES, this.sphereCount, gl.UNSIGNED_INT, 0);
+  }
+
+  // Free an offscreen render target ({ fbo, tex, rbo }) — pick buffer and snapshots.
+  _freeTarget(t) {
+    const gl = this.gl;
+    gl.deleteFramebuffer(t.fbo); gl.deleteTexture(t.tex); gl.deleteRenderbuffer(t.rbo);
+  }
+
   // Highlight one fill feature (tinted toward white), or -1 for none.
   highlight(index) {
     const id = index == null ? -1 : index;
@@ -633,7 +640,7 @@ export class Orb {
   _renderPickScene() {
     const gl = this.gl, w = this.canvas.width, h = this.canvas.height;
     if (!this._pick || this._pick.w !== w || this._pick.h !== h) {
-      if (this._pick) { gl.deleteFramebuffer(this._pick.fbo); gl.deleteTexture(this._pick.tex); gl.deleteRenderbuffer(this._pick.rbo); }
+      if (this._pick) this._freeTarget(this._pick);
       this._pick = { ...this._renderTarget(w, h), w, h };
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, this._pick.fbo);
@@ -644,11 +651,7 @@ export class Orb {
     const mvp = this.cam.mvp(w / h);
 
     // depth-only occluder: the sphere writes depth (color 0 = "nothing")
-    gl.useProgram(this.sphereProg);
-    gl.uniformMatrix4fv(this.sphereU.mvp, false, mvp);
-    gl.uniform4f(this.sphereU.color, 0, 0, 0, 0);
-    gl.bindVertexArray(this.sphereVAO);
-    gl.drawElements(gl.TRIANGLES, this.sphereCount, gl.UNSIGNED_INT, 0);
+    this._drawSphere(mvp, 0, 0, 0, 0);
 
     // fills as id-colors; u_idBase gives each layer a distinct id range
     gl.useProgram(this.pickProg);
@@ -674,10 +677,11 @@ export class Orb {
     const gl = this.gl;
     const x = Math.round(px * this.dpr), y = Math.round(this.canvas.height - py * this.dpr);
     if (x < 0 || y < 0 || x >= this.canvas.width || y >= this.canvas.height) return null;
-    const p = new Uint8Array(4);
+    const p = this._pickPixel;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this._pick.fbo);
     gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, p);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    // high byte is * 2^24, not << 24: a left shift past bit 30 goes negative in JS.
     const id = p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] * 0x1000000);
     if (id === 0) return null;                  // background / sphere / back hemisphere
     let global = id - 1;
@@ -733,7 +737,7 @@ export class Orb {
     const { fbo, tex, rbo } = this._renderTarget(w, h);
     if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.deleteFramebuffer(fbo); gl.deleteTexture(tex); gl.deleteRenderbuffer(rbo);
+      this._freeTarget({ fbo, tex, rbo });
       throw new Error('snapshot: framebuffer incomplete (size too large?)');
     }
     gl.clearColor(this.bg[0], this.bg[1], this.bg[2], transparent ? 0 : 1);
@@ -746,7 +750,7 @@ export class Orb {
     // restore the live framebuffer + clear color; repaint on the next frame
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.clearColor(...this.bg);
-    gl.deleteFramebuffer(fbo); gl.deleteTexture(tex); gl.deleteRenderbuffer(rbo);
+    this._freeTarget({ fbo, tex, rbo });
     this._dirty = true;
 
     // raw pixels (bottom-left origin) -> temp canvas, then flip + downscale to out
