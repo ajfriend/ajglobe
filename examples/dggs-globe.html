@@ -23,7 +23,7 @@
 <div id="pin" style="position:absolute;z-index:5;pointer-events:none;display:none">
   <!-- (left,top) is the projected point; the DOT is centered on it, the LABEL is offset so it never displaces the dot -->
   <span style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);width:8px;height:8px;border-radius:50%;background:#58a6ff;box-shadow:0 0 0 2px #06121f"></span>
-  <span style="position:absolute;left:9px;top:-7px;white-space:nowrap;color:#e6edf3;text-shadow:0 1px 3px #000">London</span>
+  <span style="position:absolute;left:9px;top:-7px;white-space:nowrap;color:#11151c;text-shadow:0 1px 2px #fff,0 0 3px #fff">London</span>
 </div>
 <div id="hud">
   <b>ajglobe</b> · ivea7h every cell
@@ -51,7 +51,7 @@ function viridis(t){
 }
 function bisect(arr, x){ let lo=0, hi=arr.length; while(lo<hi){const m=(lo+hi)>>1; if(arr[m]<x)lo=m+1; else hi=m;} return lo; }
 
-const orb = new Orb(document.getElementById('c'), { background:'#ffffff', sphere:'#11151c' });
+const orb = new Orb(document.getElementById('c'), { background:'#ffffff', sphere:'#e0e6ed' });
 window.orb = orb;   // handy for the console / benchmarking
 orb.lookAt(180, 25);
 
