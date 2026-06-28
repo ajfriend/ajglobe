@@ -41,6 +41,19 @@ function program(gl, vs, fs) {
   return p;
 }
 
+// Shared fragment-shader fragments (GLSL has no #include, so concatenate). Keeping
+// these in one place stops the fill/point pair from drifting on the per-feature
+// style lookup, and the two pick shaders from drifting on the id encoding (the
+// pick protocol both must agree on). Each expects the matching uniforms/varyings.
+const STYLE_LOOKUP_GLSL = `
+  int fid = int(v_fid);
+  vec4 c = texelFetch(u_style, ivec2(fid % u_styleW, fid / u_styleW), 0);
+  if (fid == u_hoverId) c.rgb = mix(c.rgb, vec3(1.0), 0.5);`;   // u_style/u_styleW/u_hoverId/v_fid -> vec4 c
+const PACK_ID_GLSL = `
+  uint id = v_fid + u_idBase + 1u;
+  o_color = vec4(float(id & 0xFFu), float((id >> 8) & 0xFFu),
+                 float((id >> 16) & 0xFFu), float((id >> 24) & 0xFFu)) / 255.0;`;   // v_fid/u_idBase -> RGBA8
+
 // Explicit attribute locations so the fill VAOs can be drawn by the pick program
 // too (GPU picking, M4) — both programs must agree on a_pos / a_featureId.
 const FILL_VS = `#version 300 es
@@ -64,10 +77,7 @@ uniform int u_styleW;
 uniform int u_hoverId;
 flat in uint v_fid;
 out vec4 o_color;
-void main() {
-  int fid = int(v_fid);
-  vec4 c = texelFetch(u_style, ivec2(fid % u_styleW, fid / u_styleW), 0);
-  if (fid == u_hoverId) c.rgb = mix(c.rgb, vec3(1.0), 0.5);
+void main() {${STYLE_LOOKUP_GLSL}
   o_color = c;
 }`;
 
@@ -80,10 +90,7 @@ precision highp int;
 uniform uint u_idBase;
 flat in uint v_fid;
 out vec4 o_color;
-void main() {
-  uint id = v_fid + u_idBase + 1u;
-  o_color = vec4(float(id & 0xFFu), float((id >> 8) & 0xFFu),
-                 float((id >> 16) & 0xFFu), float((id >> 24) & 0xFFu)) / 255.0;
+void main() {${PACK_ID_GLSL}
 }`;
 
 const SPHERE_FS = `#version 300 es
@@ -177,15 +184,12 @@ in float v_rad;
 out vec4 o_color;
 void main() {
   float cov = clamp(v_rad + 0.5 - length(v_off), 0.0, 1.0);
-  if (cov <= 0.0) discard;
-  int fid = int(v_fid);
-  vec4 c = texelFetch(u_style, ivec2(fid % u_styleW, fid / u_styleW), 0);
-  if (fid == u_hoverId) c.rgb = mix(c.rgb, vec3(1.0), 0.5);
+  if (cov <= 0.0) discard;${STYLE_LOOKUP_GLSL}
   o_color = vec4(c.rgb, c.a * cov);
 }`;
 
 // Pick pass for points: same disc cutoff (so the pickable area == the visible disc),
-// then write featureId+idBase+1 as RGBA8 (copy of PICK_FS).
+// then write the shared id encoding.
 const POINTPICK_FS = `#version 300 es
 precision highp float;
 precision highp int;
@@ -195,10 +199,7 @@ in vec2 v_off;
 in float v_rad;
 out vec4 o_color;
 void main() {
-  if (length(v_off) > v_rad + 0.5) discard;
-  uint id = v_fid + u_idBase + 1u;
-  o_color = vec4(float(id & 0xFFu), float((id >> 8) & 0xFFu),
-                 float((id >> 16) & 0xFFu), float((id >> 24) & 0xFFu)) / 255.0;
+  if (length(v_off) > v_rad + 0.5) discard;${PACK_ID_GLSL}
 }`;
 
 function hexRGBA(c) {
@@ -403,6 +404,12 @@ export class Orb {
     return buf;
   }
 
+  // Vertex i as unit-sphere xyz, from either an xyz or an lng/lat position array.
+  _posAt(xyz, lnglat, i) {
+    return xyz ? [xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2]]
+      : lnglatToVec3(lnglat[i * 2], lnglat[i * 2 + 1]);
+  }
+
   // Pack one RGBA8 texel per feature from the fill fn, row-major in W×H bytes.
   _buildStyle(n, W, H, fillFn) {
     const data = new Uint8Array(W * H * 4);
@@ -425,6 +432,26 @@ export class Orb {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
     return tex;
+  }
+
+  // Per-feature style substrate (shared by polygons() and points()): an RGBA8
+  // texture, one texel per feature indexed by id, plus an in-place `restyle(fn)`
+  // that rewrites the texels without touching geometry. colorFn/fn: (i) => color.
+  _makeStyle(n, colorFn) {
+    const gl = this.gl;
+    const toFn = (f) => (typeof f === 'function' ? f : () => f);
+    const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    const W = Math.min(maxTex, 4096);
+    const H = Math.max(1, Math.ceil(n / W));
+    if (H > maxTex) throw new Error(`too many features for one style texture: ${n}`);
+    const tex = this._styleTexture(W, H, this._buildStyle(n, W, H, toFn(colorFn)));
+    const restyle = (f) => {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE,
+        this._buildStyle(n, W, H, toFn(f)));
+      this._dirty = true;
+    };
+    return { tex, W, H, restyle };
   }
 
   // Subdivide one fan triangle (vertex indices ia,ib,ic into P) onto the sphere
@@ -542,14 +569,9 @@ export class Orb {
       nVerts = pos.length / 3;
     }
 
-    // Per-feature style: one RGBA8 texel per feature, indexed by id (row-major in
-    // a W-wide texture). Restyle = rewrite these texels; geometry is untouched.
-    const fillFn = typeof fill === 'function' ? fill : () => fill;
-    const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
-    const W = Math.min(maxTex, 4096);
-    const H = Math.max(1, Math.ceil(nCells / W));
-    if (H > maxTex) throw new Error(`too many features for one style texture: ${nCells}`);
-    const styleTex = this._styleTexture(W, H, this._buildStyle(nCells, W, H, fillFn));
+    // Per-feature style: one RGBA8 texel per feature, indexed by id (restyle just
+    // rewrites those texels; geometry is untouched).
+    const { tex: styleTex, W, H, restyle } = this._makeStyle(nCells, fill);
 
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
@@ -562,16 +584,7 @@ export class Orb {
       vao, count: idx.length, nCells, nVerts,
       styleTex, styleW: W, styleH: H, _buffers: [pb, fb, ib],
     };
-    // Restyle without re-tessellating: rewrite the per-feature texels only.
-    layer.update = ({ fill: f } = {}) => {
-      if (f == null) return layer;
-      const fn = typeof f === 'function' ? f : () => f;
-      gl.bindTexture(gl.TEXTURE_2D, styleTex);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE,
-        this._buildStyle(nCells, W, H, fn));
-      this._dirty = true;
-      return layer;
-    };
+    layer.update = ({ fill: f } = {}) => { if (f != null) restyle(f); return layer; };
     layer.remove = () => {
       this.layers = this.layers.filter((l) => l !== layer);
       gl.deleteVertexArray(vao);
@@ -600,9 +613,7 @@ export class Orb {
     const nLines = starts.length - 1;
     const R = 1.0015;                            // lift above the fills
     const MAX_SEG = 0.05;                         // rad; densify long edges into arcs
-    const vec = (i) => (xyz
-      ? [xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2]]
-      : lnglatToVec3(lnglat[i * 2], lnglat[i * 2 + 1]));
+    const vec = (i) => this._posAt(xyz, lnglat, i);
 
     // Per segment, 4 verts carrying both endpoints (a_pA, a_pB) + (end, side); the
     // vertex shader does the screen-space offset, so geometry is view-independent.
@@ -667,9 +678,7 @@ export class Orb {
     const nPoints = xyz ? xyz.length / 3 : lnglat.length / 2;
     const R = 1.002;                              // lift above fills/strokes
     const sizeFn = typeof size === 'function' ? size : () => size;
-    const vec = (i) => (xyz
-      ? [xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2]]
-      : lnglatToVec3(lnglat[i * 2], lnglat[i * 2 + 1]));
+    const vec = (i) => this._posAt(xyz, lnglat, i);
 
     // 4 verts per point (a screen-space quad); the vertex shader billboards them.
     // a_center/a_radius/a_featureId repeat across the quad (as strokes repeat a_pA/B).
@@ -688,12 +697,7 @@ export class Orb {
     }
 
     // Per-feature color/alpha in a style texture sampled by id (same as fills).
-    const colorFn = typeof color === 'function' ? color : () => color;
-    const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
-    const W = Math.min(maxTex, 4096);
-    const H = Math.max(1, Math.ceil(nPoints / W));
-    if (H > maxTex) throw new Error(`too many points for one style texture: ${nPoints}`);
-    const styleTex = this._styleTexture(W, H, this._buildStyle(nPoints, W, H, colorFn));
+    const { tex: styleTex, W, H, restyle } = this._makeStyle(nPoints, color);
 
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
@@ -708,15 +712,7 @@ export class Orb {
       vao, count: IDX.length, nPoints,
       styleTex, styleW: W, styleH: H, _buffers: [cob, ceb, rab, fib, ib],
     };
-    layer.update = ({ color: c } = {}) => {        // restyle color/alpha; geometry untouched
-      if (c == null) return layer;
-      const fn = typeof c === 'function' ? c : () => c;
-      gl.bindTexture(gl.TEXTURE_2D, styleTex);
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE,
-        this._buildStyle(nPoints, W, H, fn));
-      this._dirty = true;
-      return layer;
-    };
+    layer.update = ({ color: c } = {}) => { if (c != null) restyle(c); return layer; };
     layer.remove = () => {
       this.pointLayers = this.pointLayers.filter((l) => l !== layer);
       gl.deleteVertexArray(vao);
@@ -732,26 +728,29 @@ export class Orb {
   // Batteries-included reference geometry (Natural Earth), fetched from a CDN and
   // drawn via lines() — the library bundles no data. detail: '110m' | '50m' | '10m'.
   // baseUrl overrides the default CDN (e.g. self-hosted GeoJSON). Returns the layer.
-  async coastlines(opts = {}) { return this._neLines('coastline', '#000000', 1.5, false, opts); }
+  async coastlines(opts = {}) {
+    return this._neLines({ file: 'coastline', color: '#000000', width: 1.5, stitch: false, ...opts });
+  }
   // Full country outlines (admin-0 country polygons → ring polylines), so borders
   // read as complete shapes on their own (coast included), not just inter-country
   // land boundaries. Pair with coastlines() and the shared coast slightly overdraws.
   // Stitched by default (un-cuts the antimeridian/polar splits); `stitch:false` to
   // skip, or `stitch: geoStitch` to inject your own (offline / no CDN).
-  async borders(opts = {}) { return this._neLines('admin_0_countries', '#c2185b', 1.2, true, opts); }
+  async borders(opts = {}) {
+    return this._neLines({ file: 'admin_0_countries', color: '#c2185b', width: 1.2, stitch: true, ...opts });
+  }
 
-  async _neLines(layer, defColor, defWidth, defStitch, { detail = '50m', color, width, baseUrl, stitch } = {}) {
-    const url = `${baseUrl || DEFAULT_NE}/ne_${detail}_${layer}.geojson`;
+  async _neLines({ file, detail = '50m', color, width, baseUrl, stitch }) {
+    const url = `${baseUrl || DEFAULT_NE}/ne_${detail}_${file}.geojson`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`ajglobe: failed to load ${url} (${res.status})`);
     let gj = await res.json();
-    const want = stitch === undefined ? defStitch : stitch;
-    if (want) {
-      try { gj = applyStitch(typeof want === 'function' ? want : await loadStitch(), gj); }
+    if (stitch) {
+      try { gj = applyStitch(typeof stitch === 'function' ? stitch : await loadStitch(), gj); }
       catch (e) { console.warn('ajglobe: geoStitch unavailable, drawing raw polygons —', e.message); }
     }
     const { lnglat, starts } = geojsonLines(gj);
-    return this.lines({ lnglat, starts, color: color || defColor, width: width || defWidth });
+    return this.lines({ lnglat, starts, color, width });
   }
 
   lookAt(lng, lat) { this.cam.lookAt(lng, lat); }

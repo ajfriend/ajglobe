@@ -4,17 +4,17 @@
 
 import { vec3, quat, mat4, lnglatToVec3, vec3ToLngLat } from './glmath.js';
 
-// Keyboard rotation map: e.code -> [axis x, y, z, sign], a rotation axis in the
-// world frame (pre-multiplied like the drag). Directions are by on-screen motion
-// (verified empirically — the screen-vertical tilt is the world X axis here, the
-// horizontal spin is world Y): Up/Down + W/S move the globe up/down, A/D move it
-// left/right (both matching a drag), Left/Right + Q/E roll about the view axis.
+// Keyboard rotation map: e.code -> signed rotation axis in the world frame
+// (pre-multiplied like the drag). Directions are by on-screen motion (verified
+// empirically — the screen-vertical tilt is the world X axis here, the horizontal
+// spin is world Y): Up/Down + W/S move the globe up/down, A/D move it left/right
+// (both matching a drag), Left/Right + Q/E roll about the view axis.
 const KEY_AXIS = {
-  ArrowUp: [1, 0, 0, -1], KeyW: [1, 0, 0, -1],    // up
-  ArrowDown: [1, 0, 0, 1], KeyS: [1, 0, 0, 1],    // down
-  KeyA: [0, 1, 0, -1], KeyD: [0, 1, 0, 1],        // left / right
-  ArrowLeft: [0, 0, 1, 1], KeyQ: [0, 0, 1, 1],    // roll
-  ArrowRight: [0, 0, 1, -1], KeyE: [0, 0, 1, -1],
+  ArrowUp: [-1, 0, 0], KeyW: [-1, 0, 0],    // up
+  ArrowDown: [1, 0, 0], KeyS: [1, 0, 0],    // down
+  KeyA: [0, -1, 0], KeyD: [0, 1, 0],        // left / right
+  ArrowLeft: [0, 0, 1], KeyQ: [0, 0, 1],    // roll
+  ArrowRight: [0, 0, -1], KeyE: [0, 0, -1],
 };
 
 export class Camera {
@@ -76,11 +76,10 @@ export class Camera {
     // world-frame (screen-aligned) rotation, pre-multiplied like the drag.
     if (c.tabIndex < 0) c.tabIndex = 0;
     c.addEventListener('keydown', (e) => {
-      const ax = KEY_AXIS[e.code];
-      if (!ax) return;
+      const axis = KEY_AXIS[e.code];
+      if (!axis) return;
       e.preventDefault();
-      const ang = ax[3] * (e.shiftKey ? 30 : 10) * Math.PI / 180;
-      const delta = quat.fromAxisAngle([ax[0], ax[1], ax[2]], ang);
+      const delta = quat.fromAxisAngle(axis, (e.shiftKey ? 30 : 10) * Math.PI / 180);
       this.q = quat.normalize(quat.multiply(delta, this.q));
       this.onChange();
     }, { signal });

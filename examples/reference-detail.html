@@ -65,9 +65,8 @@ const style = { coast: { color: '#111111', width: 1.6 }, border: { color: '#c218
 const fetchFn = { coast: (o) => orb.coastlines(o), border: (o) => orb.borders(o) };
 
 function report(){
-  status.textContent = `detail ${detail} · `
-    + ['coast', 'border'].filter(k => layer[k]).map(k => `${k} ${layer[k].nLines.toLocaleString()}`).join(' · ')
-    || `detail ${detail}`;
+  const parts = ['coast', 'border'].filter(k => layer[k]).map(k => `${k} ${layer[k].nLines.toLocaleString()}`);
+  status.textContent = `detail ${detail}` + (parts.length ? ' · ' + parts.join(' · ') : '');
 }
 async function draw(kind){           // (re)load one layer at the current detail
   if(layer[kind]) layer[kind].remove();
