@@ -28,7 +28,7 @@
 <body>
 <div id="bar">
   <b>ajglobe</b> <span class="sep">·</span>
-  <button id="coast" class="on">coastlines</button><button id="border">borders</button>
+  <button id="coast" class="on">coastlines</button><button id="border">borders</button><button id="cities">cities</button>
   <span class="sep">detail</span>
   <button data-d="110m">110m</button><button data-d="50m" class="on">50m</button><button data-d="10m">10m</button>
   <span class="sep">view</span>
@@ -87,6 +87,27 @@ document.querySelectorAll('[data-d]').forEach(b => b.onclick = async ()=>{
   for(const kind of ['coast', 'border']) if(layer[kind]) await draw(kind);   // reload what's on
 });
 document.querySelectorAll('[data-go]').forEach(b => b.onclick = () => goTo(b.dataset.go));
+
+// points(): a few world-city markers, toggled on/off. Hover one to read its name
+// (GPU picking via on('hover') → the layer + feature index).
+const CITIES = [
+  ['London', 0, 51], ['New York', -74, 41], ['Tokyo', 140, 36], ['Sydney', 151, -34],
+  ['Rio', -43, -23], ['Cairo', 31, 30], ['Delhi', 77, 29], ['Cape Town', 18, -34],
+  ['Los Angeles', -118, 34], ['Singapore', 104, 1],
+];
+let cityLayer = null;
+document.getElementById('cities').onclick = (e) => {
+  if (cityLayer) { cityLayer.remove(); cityLayer = null; e.target.classList.remove('on'); report(); return; }
+  cityLayer = orb.points({
+    lnglat: new Float32Array(CITIES.flatMap(c => [c[1], c[2]])),
+    color: '#ff3b30', size: 6,
+  });
+  e.target.classList.add('on');
+};
+orb.on('hover', (h) => {
+  if (cityLayer && h.layer === cityLayer) status.textContent = `city: ${CITIES[h.index][0]}`;
+  else report();
+});
 
 draw('coast');   // start with coastlines on
 </script>

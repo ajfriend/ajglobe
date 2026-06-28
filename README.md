@@ -29,10 +29,11 @@ lines (coastlines), and drag/zoom — done right, once.
 + scroll zoom, in WebGL2, zero dependencies. Proven against every ivea7h cell at
 r5 (168k) and r6 (1.18M) — the pole cell fills, the antimeridian is clean.
 
-Since then: per-feature styling + opacity, `project`/`unproject` + hover/click
-events, thick AA great-circle strokes (`lines()`), GPU hover picking, `snapshot()`
-PNG export, `coastlines()`/`borders()`, keyboard rotation, and `destroy()`. Next:
-`points()`, a `dist/` bundle, and unit tests. See [PLAN.md](PLAN.md).
+Since then, all three GeoJSON primitives — `polygons()`, `lines()`, `points()` —
+plus per-feature styling + opacity, `project`/`unproject` + hover/click events, GPU
+hover picking, `snapshot()` PNG export, `coastlines()`/`borders()`, keyboard
+rotation, and `destroy()`. Next: a `dist/` bundle, unit tests, npm. See
+[PLAN.md](PLAN.md).
 
 **Controls:** drag to rotate, scroll to zoom. With the globe focused (click it),
 the keyboard rotates too — arrows / `WASD` tilt and spin, `Q`/`E` (and `←`/`→`)
@@ -47,6 +48,11 @@ orb.polygons({
   lnglat,           // Float32Array [lng,lat, ...]  (or xyz: [x,y,z,...])
   starts,           // Uint32Array ring start indices (len = nCells + 1)
   fill: i => [r,g,b,a],   // per-cell color, or a constant [r,g,b,a]
+});
+orb.points({
+  lnglat,                 // Float32Array [lng,lat, ...]  (or xyz)
+  color: i => [r,g,b,a],  // per-point color (or a constant / '#rrggbb')
+  size: 6,                // disc radius in CSS px (per-point fn or constant)
 });
 orb.lookAt(180, 0);   // center a lng/lat under the viewer
 orb.on('hover', e => { /* e.index = feature under the cursor (GPU picking) */ });

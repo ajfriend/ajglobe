@@ -93,8 +93,9 @@ test/           (empty — geometry unit tests to come)
 ```
 
 Render order each frame (only when dirty): opaque depth sphere (radius 0.998) →
-polygon fills (radius 1.0, depth-tested → back hemisphere occluded) → [strokes,
-later]. Geometry is built once on `polygons()`; rotation is just a uniform.
+polygon fills (radius 1.0) → strokes (radius 1.0015) → point discs (radius 1.002),
+all depth-tested against the sphere → back hemisphere occluded. Geometry is built
+once per layer; rotation is just a uniform.
 
 **Core substrates (shared, primitive-agnostic — build once, reuse everywhere).**
 Two things live *below* the primitive renderers and are consumed identically by
@@ -117,6 +118,7 @@ const layer = orb.polygons({ lnglat|xyz, starts, fill: i => [r,g,b,a] });
 layer.update({ fill });            // restyle in place (no re-tessellation)
 layer.remove();
 orb.lines({ lnglat|xyz, starts, color, width });   // thick AA great-circle strokes
+orb.points({ lnglat|xyz, color, size });           // round disc markers (per-feature)
 orb.lookAt(lng, lat);
 orb.project(lng, lat);             // -> {x, y, visible}  (canvas CSS px)
 orb.unproject(x, y);               // -> {lng, lat} | null
@@ -127,7 +129,7 @@ await orb.snapshot({ width, height, supersample, transparent, type });  // -> PN
 orb.stats;                         // {cells, verts}
 orb.destroy();                     // stop the loop, detach listeners, free all GPU resources
 ```
-Planned additions (picking index in hover/click; per-feature stroke width; points()).
+Planned additions (per-feature stroke width; `points()` outline/size-update; labels).
 
 ## 6. Roadmap
 
@@ -206,12 +208,18 @@ substrate from M2.
   - [x] demo: `examples/reference-detail.html` — single globe, coastlines/borders
         toggles + 110m/50m/10m detail + view presets (Aegean/Britain/Europe/world).
   - [ ] more examples, README, `dist/` esbuild bundle, basic geometry unit tests
-- [ ] **M6 — `points()` primitive:** the third GeoJSON primitive. Screen-space
-      quads/sprites at each feature's unit-sphere position; depth-
-      tested against the background sphere so back-hemisphere points are hidden
-      (and `project().visible` agrees). Per-feature radius/color/opacity via the
-      M2 style substrate; reuses M4 picking by `featureId`. Enables pin/marker/
-      bubble-map apps (e.g. cell centroids, city dots) on top.
+- [x] **M6 — `points()` primitive** — the third GeoJSON primitive. Each point is a
+      screen-space round disc of constant pixel size at its unit-sphere position,
+      billboarded in the vertex shader (offset `clip.xy`, keep the center's depth) so
+      it depth-tests against the background sphere — **back-hemisphere points hidden,
+      agreeing with `project().visible`**. Per-feature **color/alpha via the M2 style
+      texture** (`update({color})` restyles), per-feature **radius via a vertex
+      attribute** (`size`). **Pickable** through the M4 id-buffer, with fills + points
+      sharing one global id space. Built as **expanded quads (4 verts/point), not
+      instanced** — mirrors `lines()`, reuses `_attrib`/style-texture/pick infra, adds
+      no new GL concept. Verified headless on city markers: clean AA discs, picking
+      (`pick`/`on('hover')`), back hemisphere hidden, recolor, z-order over fills/
+      strokes/coastlines, `glError 0`. Demo: `cities` toggle in `reference-detail.html`.
 - [ ] **Later:** time-normalized momentum (opt-in), concave polygon fills
       (spherical ear-clip), perspective/deep zoom, reuse the 3D core for 2D map
       projections, publish to npm

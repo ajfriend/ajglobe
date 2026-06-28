@@ -136,6 +136,71 @@ void main() {
   o_color = vec4(u_color.rgb, u_color.a * cov);
 }`;
 
+// Points (M6): each marker is a screen-space round disc of constant pixel radius,
+// billboarded around its unit-sphere center like a stroke quad — offset clip.xy by
+// the corner, keep the center's clip.z/w so the disc takes the center's depth (back
+// hemisphere hidden by the depth sphere). Explicit attribute locations so the same
+// VAO drives both the color and the pick program (like FILL_VS).
+const POINT_VS = `#version 300 es
+layout(location = 0) in vec2 a_corner;     // unit-quad corner (-1/+1, -1/+1)
+layout(location = 1) in vec3 a_center;     // unit-sphere xyz (lifted above fills)
+layout(location = 2) in float a_radius;    // disc radius, CSS px
+layout(location = 3) in uint a_featureId;
+uniform mat4 u_mvp;
+uniform vec2 u_viewport;   // device px
+uniform float u_dppx;      // device px per CSS px (radius is CSS px)
+flat out uint v_fid;
+out vec2 v_off;            // device-px offset from the disc center
+out float v_rad;           // disc radius, device px
+void main() {
+  v_fid = a_featureId;
+  float rad = a_radius * u_dppx;
+  float pad = rad + 1.0;            // +1px so the AA ramp has room
+  v_rad = rad;
+  v_off = a_corner * pad;
+  vec4 clip = u_mvp * vec4(a_center, 1.0);
+  clip.xy += (a_corner * pad) / (u_viewport * 0.5) * clip.w;
+  gl_Position = clip;
+}`;
+
+// Round disc with a 1px radial AA edge (radial analog of STROKE_FS). Color/alpha from
+// the per-feature style texture by id (identical lookup to FILL_FS), hover white-tint.
+const POINT_FS = `#version 300 es
+precision highp float;
+precision highp int;
+uniform highp sampler2D u_style;
+uniform int u_styleW;
+uniform int u_hoverId;
+flat in uint v_fid;
+in vec2 v_off;
+in float v_rad;
+out vec4 o_color;
+void main() {
+  float cov = clamp(v_rad + 0.5 - length(v_off), 0.0, 1.0);
+  if (cov <= 0.0) discard;
+  int fid = int(v_fid);
+  vec4 c = texelFetch(u_style, ivec2(fid % u_styleW, fid / u_styleW), 0);
+  if (fid == u_hoverId) c.rgb = mix(c.rgb, vec3(1.0), 0.5);
+  o_color = vec4(c.rgb, c.a * cov);
+}`;
+
+// Pick pass for points: same disc cutoff (so the pickable area == the visible disc),
+// then write featureId+idBase+1 as RGBA8 (copy of PICK_FS).
+const POINTPICK_FS = `#version 300 es
+precision highp float;
+precision highp int;
+uniform uint u_idBase;
+flat in uint v_fid;
+in vec2 v_off;
+in float v_rad;
+out vec4 o_color;
+void main() {
+  if (length(v_off) > v_rad + 0.5) discard;
+  uint id = v_fid + u_idBase + 1u;
+  o_color = vec4(float(id & 0xFFu), float((id >> 8) & 0xFFu),
+                 float((id >> 16) & 0xFFu), float((id >> 24) & 0xFFu)) / 255.0;
+}`;
+
 function hexRGBA(c) {
   if (Array.isArray(c)) return c.length === 4 ? c : [...c, 255];
   const h = c.replace('#', '');
@@ -214,6 +279,8 @@ export class Orb {
     this.sphereProg = program(gl, SPHERE_VS, SPHERE_FS);
     this.strokeProg = program(gl, STROKE_VS, STROKE_FS);
     this.pickProg = program(gl, FILL_VS, PICK_FS);   // same vertex stage as fills
+    this.pointProg = program(gl, POINT_VS, POINT_FS);
+    this.pointPickProg = program(gl, POINT_VS, POINTPICK_FS);   // same vertex stage as points
     // Uniform locations are fixed after link — resolve once, not per frame.
     this.fillU = {
       mvp: gl.getUniformLocation(this.fillProg, 'u_mvp'),
@@ -224,6 +291,20 @@ export class Orb {
     this.pickU = {
       mvp: gl.getUniformLocation(this.pickProg, 'u_mvp'),
       idBase: gl.getUniformLocation(this.pickProg, 'u_idBase'),
+    };
+    this.pointU = {
+      mvp: gl.getUniformLocation(this.pointProg, 'u_mvp'),
+      viewport: gl.getUniformLocation(this.pointProg, 'u_viewport'),
+      dppx: gl.getUniformLocation(this.pointProg, 'u_dppx'),
+      style: gl.getUniformLocation(this.pointProg, 'u_style'),
+      styleW: gl.getUniformLocation(this.pointProg, 'u_styleW'),
+      hoverId: gl.getUniformLocation(this.pointProg, 'u_hoverId'),
+    };
+    this.pointPickU = {
+      mvp: gl.getUniformLocation(this.pointPickProg, 'u_mvp'),
+      viewport: gl.getUniformLocation(this.pointPickProg, 'u_viewport'),
+      dppx: gl.getUniformLocation(this.pointPickProg, 'u_dppx'),
+      idBase: gl.getUniformLocation(this.pointPickProg, 'u_idBase'),
     };
     this.sphereU = {
       mvp: gl.getUniformLocation(this.sphereProg, 'u_mvp'),
@@ -244,6 +325,7 @@ export class Orb {
 
     this.layers = [];
     this.lineLayers = [];
+    this.pointLayers = [];
     this._handlers = { hover: [], click: [], viewchange: [] };
     // One AbortController removes every canvas listener (Orb's + Camera's) on destroy().
     this._destroyed = false;
@@ -280,11 +362,12 @@ export class Orb {
     this._abort.abort();              // removes all canvas listeners (Orb + Camera)
     this._resizeObs.disconnect();
     const gl = this.gl;
-    [...this.layers, ...this.lineLayers].forEach((l) => l.remove());   // VAOs, buffers, style textures
+    [...this.layers, ...this.lineLayers, ...this.pointLayers].forEach((l) => l.remove());   // VAOs, buffers, style textures
     if (this._pick) { this._freeTarget(this._pick); this._pick = null; }
     gl.deleteVertexArray(this.sphereVAO);
     this._sphereBuffers.forEach((b) => gl.deleteBuffer(b));
-    for (const p of [this.fillProg, this.sphereProg, this.strokeProg, this.pickProg]) gl.deleteProgram(p);
+    for (const p of [this.fillProg, this.sphereProg, this.strokeProg, this.pickProg,
+      this.pointProg, this.pointPickProg]) gl.deleteProgram(p);
   }
 
   // Create an ARRAY_BUFFER and wire it to a vertex attribute on the bound VAO.
@@ -571,6 +654,81 @@ export class Orb {
     return layer;
   }
 
+  // Add a point layer: each feature is a screen-space round disc of constant pixel
+  // size at its unit-sphere position, depth-tested against the background sphere
+  // (back-hemisphere points hidden), pickable, and styled per-feature. Markers draw
+  // on top of fills and strokes.
+  //   xyz | lnglat : Float32Array positions (3/vertex unit xyz, or 2/vertex lng,lat)
+  //   color        : (i) => [r,g,b,a] | '#rrggbb' | constant   (per-feature)
+  //   size         : (i) => radiusPx  | number                 (per-feature, CSS px)
+  // Returns the layer; layer.update({color}) restyles, layer.remove() frees it.
+  points({ xyz, lnglat, color = '#ff3b30', size = 5 }) {
+    const gl = this.gl;
+    const nPoints = xyz ? xyz.length / 3 : lnglat.length / 2;
+    const R = 1.002;                              // lift above fills/strokes
+    const sizeFn = typeof size === 'function' ? size : () => size;
+    const vec = (i) => (xyz
+      ? [xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2]]
+      : lnglatToVec3(lnglat[i * 2], lnglat[i * 2 + 1]));
+
+    // 4 verts per point (a screen-space quad); the vertex shader billboards them.
+    // a_center/a_radius/a_featureId repeat across the quad (as strokes repeat a_pA/B).
+    const CO = [], CEN = [], RAD = [], FID = [], IDX = [];
+    const corners = [-1, -1, 1, -1, -1, 1, 1, 1];
+    let base = 0;
+    for (let p = 0; p < nPoints; p++) {
+      const v = vec(p), r = sizeFn(p);
+      const cx = v[0] * R, cy = v[1] * R, cz = v[2] * R;
+      for (let q = 0; q < 4; q++) {
+        CO.push(corners[q * 2], corners[q * 2 + 1]);
+        CEN.push(cx, cy, cz); RAD.push(r); FID.push(p);
+      }
+      IDX.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
+      base += 4;
+    }
+
+    // Per-feature color/alpha in a style texture sampled by id (same as fills).
+    const colorFn = typeof color === 'function' ? color : () => color;
+    const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    const W = Math.min(maxTex, 4096);
+    const H = Math.max(1, Math.ceil(nPoints / W));
+    if (H > maxTex) throw new Error(`too many points for one style texture: ${nPoints}`);
+    const styleTex = this._styleTexture(W, H, this._buildStyle(nPoints, W, H, colorFn));
+
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const cob = this._attrib(this.pointProg, 'a_corner', new Float32Array(CO), 2);
+    const ceb = this._attrib(this.pointProg, 'a_center', new Float32Array(CEN), 3);
+    const rab = this._attrib(this.pointProg, 'a_radius', new Float32Array(RAD), 1);
+    const fib = this._attribI(this.pointProg, 'a_featureId', new Uint32Array(FID), 1, gl.UNSIGNED_INT);
+    const ib = this._elements(new Uint32Array(IDX));
+    gl.bindVertexArray(null);
+
+    const layer = {
+      vao, count: IDX.length, nPoints,
+      styleTex, styleW: W, styleH: H, _buffers: [cob, ceb, rab, fib, ib],
+    };
+    layer.update = ({ color: c } = {}) => {        // restyle color/alpha; geometry untouched
+      if (c == null) return layer;
+      const fn = typeof c === 'function' ? c : () => c;
+      gl.bindTexture(gl.TEXTURE_2D, styleTex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE,
+        this._buildStyle(nPoints, W, H, fn));
+      this._dirty = true;
+      return layer;
+    };
+    layer.remove = () => {
+      this.pointLayers = this.pointLayers.filter((l) => l !== layer);
+      gl.deleteVertexArray(vao);
+      layer._buffers.forEach((b) => gl.deleteBuffer(b));
+      gl.deleteTexture(styleTex);
+      this._invalidate();
+    };
+    this.pointLayers.push(layer);
+    this._invalidate();
+    return layer;
+  }
+
   // Batteries-included reference geometry (Natural Earth), fetched from a CDN and
   // drawn via lines() — the library bundles no data. detail: '110m' | '50m' | '10m'.
   // baseUrl overrides the default CDN (e.g. self-hosted GeoJSON). Returns the layer.
@@ -693,6 +851,27 @@ export class Orb {
       }
       gl.depthMask(true);
     }
+
+    // 4) point markers (screen-space discs) — topmost overlay. Color from each
+    // layer's per-feature style texture; depth-test against the sphere (back hidden)
+    // but don't write depth.
+    if (this.pointLayers.length) {
+      gl.useProgram(this.pointProg);
+      gl.uniformMatrix4fv(this.pointU.mvp, false, mvp);
+      gl.uniform2f(this.pointU.viewport, w, h);
+      gl.uniform1f(this.pointU.dppx, dppx);
+      gl.uniform1i(this.pointU.style, 0);
+      gl.uniform1i(this.pointU.hoverId, this._hoverId);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.depthMask(false);
+      for (const l of this.pointLayers) {
+        gl.bindTexture(gl.TEXTURE_2D, l.styleTex);
+        gl.uniform1i(this.pointU.styleW, l.styleW);
+        gl.bindVertexArray(l.vao);
+        gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
+      }
+      gl.depthMask(true);
+    }
     gl.bindVertexArray(null);
   }
 
@@ -755,6 +934,22 @@ export class Orb {
       gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
       base += l.nCells;
     }
+    // point discs continue the same global id space (drawn after fills so they win
+    // where they overlap); the back hemisphere is already occluded by the sphere.
+    if (this.pointLayers.length) {
+      gl.useProgram(this.pointPickProg);
+      gl.uniformMatrix4fv(this.pointPickU.mvp, false, mvp);
+      gl.uniform2f(this.pointPickU.viewport, w, h);
+      gl.uniform1f(this.pointPickU.dppx, this.dpr);
+      gl.depthMask(false);
+      for (const l of this.pointLayers) {
+        gl.uniform1ui(this.pointPickU.idBase, base);
+        gl.bindVertexArray(l.vao);
+        gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
+        base += l.nPoints;
+      }
+      gl.depthMask(true);
+    }
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.enable(gl.BLEND);
@@ -764,7 +959,7 @@ export class Orb {
   // Which fill feature is under a canvas pixel? -> { layer, index } or null. Renders
   // the id-buffer once per view change, then reads back a single pixel.
   pick(px, py) {
-    if (!this.layers.length) return null;
+    if (!this.layers.length && !this.pointLayers.length) return null;
     if (!this._pickValid) this._renderPickScene();
     const gl = this.gl;
     const x = Math.round(px * this.dpr), y = Math.round(this.canvas.height - py * this.dpr);
@@ -780,6 +975,10 @@ export class Orb {
     for (const l of this.layers) {
       if (global < l.nCells) return { layer: l, index: global };
       global -= l.nCells;
+    }
+    for (const l of this.pointLayers) {
+      if (global < l.nPoints) return { layer: l, index: global };
+      global -= l.nPoints;
     }
     return null;
   }
