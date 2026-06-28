@@ -110,11 +110,18 @@ TBD); the design rationale and trade-offs are the §7 decisions:
 Current:
 ```js
 const orb = new Orb(canvas, { background:'#0b0e13', sphere:'#11151c' });
-orb.polygons({ lnglat|xyz, starts, fill: i => [r,g,b,a] });  // returns layer{update?,remove}
+const layer = orb.polygons({ lnglat|xyz, starts, fill: i => [r,g,b,a] });
+layer.update({ fill });            // restyle in place (no re-tessellation)
+layer.remove();
+orb.lines({ lnglat|xyz, starts, color, width });   // thick AA great-circle strokes
 orb.lookAt(lng, lat);
-orb.stats; // {cells, verts}
+orb.project(lng, lat);             // -> {x, y, visible}  (canvas CSS px)
+orb.unproject(x, y);               // -> {lng, lat} | null
+orb.on('hover'|'click'|'viewchange', cb);          // -> unsubscribe fn
+await orb.snapshot({ width, height, supersample, transparent, type });  // -> PNG Blob
+orb.stats;                         // {cells, verts}
 ```
-Planned additions (the composition surface + features below).
+Planned additions (picking index in hover/click; per-feature stroke width; points()).
 
 ## 6. Roadmap
 
@@ -156,7 +163,15 @@ substrate from M2.
       *Deferred:* round/miter joins (shallow densified corners look fine); per-
       feature width/color (one color+width per layer for now).
 - [ ] **M4 — GPU hover picking:** offscreen id-color FBO + readPixels → feature
-      index; wires into `on('hover'/'click')`
+      index; wires into `on('hover'/'click')`. The offscreen-FBO + `readPixels` +
+      `_renderScene(w,h)` infra already exists (built for `snapshot()`) — picking
+      reuses it: render featureId-as-color to a 1×1 (or small) FBO and read back.
+- [x] **`snapshot({width,height,supersample,transparent,type}) → PNG Blob`** —
+      renders the current view to an offscreen FBO at any resolution (supersampled
+      for AA), independent of the on-screen canvas; transparent-background option.
+      For shareable stills + headless batch capture. Example has a "save PNG"
+      button. Verified headless: 1600×1200 PNG, transparent alpha, strokes scale
+      with output res, live canvas untouched.
 - [ ] **M5 — reference-geometry helpers + polish**
   - [x] `lines()` primitive over open polylines — done with M3 (thick AA strokes
         + slerp densification). Coastline overlay demo in the example.

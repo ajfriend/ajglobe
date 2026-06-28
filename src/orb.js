@@ -517,10 +517,21 @@ export class Orb {
     if (!this._dirty) return;
     this._dirty = false;
     const gl = this.gl;
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.clearColor(...this.bg);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    const aspect = this.canvas.width / this.canvas.height;
-    const mvp = this.cam.mvp(aspect);
+    this._renderScene(this.canvas.width, this.canvas.height);
+  }
+
+  // Draw the scene (depth sphere -> fills -> strokes) into the currently-bound
+  // framebuffer at w x h device px. The caller binds the target and clears it, so
+  // the same path serves the live frame and offscreen snapshots. Stroke width is
+  // scaled by device-px-per-CSS-px so it looks identical at any output resolution.
+  _renderScene(w, h) {
+    const gl = this.gl;
+    gl.viewport(0, 0, w, h);
+    const mvp = this.cam.mvp(w / h);
+    const dppx = this.canvas.clientHeight ? h / this.canvas.clientHeight : this.dpr;
 
     // 1) opaque background sphere (depth) -> hides the back hemisphere
     gl.useProgram(this.sphereProg);
@@ -547,16 +558,89 @@ export class Orb {
     if (this.lineLayers.length) {
       gl.useProgram(this.strokeProg);
       gl.uniformMatrix4fv(this.strokeU.mvp, false, mvp);
-      gl.uniform2f(this.strokeU.viewport, this.canvas.width, this.canvas.height);
+      gl.uniform2f(this.strokeU.viewport, w, h);
       gl.depthMask(false);
       for (const l of this.lineLayers) {
         gl.uniform4f(this.strokeU.color, l.color[0], l.color[1], l.color[2], l.color[3]);
-        gl.uniform1f(this.strokeU.hw, l.width * this.dpr * 0.5);
+        gl.uniform1f(this.strokeU.hw, l.width * dppx * 0.5);
         gl.bindVertexArray(l.vao);
         gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
       }
       gl.depthMask(true);
     }
     gl.bindVertexArray(null);
+  }
+
+  // Offscreen render target: RGBA8 color texture + depth renderbuffer + FBO at
+  // w x h. Returns the handles for snapshot(); this is also the infra M4 picking
+  // will reuse. Leaves the FBO bound.
+  _renderTarget(w, h) {
+    const gl = this.gl;
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    const rbo = gl.createRenderbuffer();
+    gl.bindRenderbuffer(gl.RENDERBUFFER, rbo);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+    const fbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rbo);
+    return { fbo, tex, rbo };
+  }
+
+  // Render the current view to an offscreen buffer at an arbitrary resolution and
+  // return a PNG (or JPEG) Blob — independent of the on-screen canvas, so it works
+  // for crisp shareable stills and headless batch capture. The live canvas/dpr are
+  // never touched.
+  //   width/height : output px (default: current drawing-buffer size; pass width
+  //                  alone to keep the current aspect)
+  //   supersample  : internal AA oversampling (default 2; clamped to GPU limits)
+  //   transparent  : true -> outside the globe disk is transparent (PNG)
+  //   type/quality : 'image/png' (default) | 'image/jpeg', quality 0..1
+  snapshot({ width, height, supersample = 2, type = 'image/png', quality, transparent = false } = {}) {
+    const gl = this.gl, canvas = this.canvas;
+    const outW = Math.max(1, Math.round(width || canvas.width));
+    const outH = Math.max(1, Math.round(height
+      || (width ? width * canvas.height / canvas.width : canvas.height)));
+    // supersample internally for AA, clamped to the GPU's max renderbuffer size
+    const max = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE);
+    let ss = Math.max(1, supersample);
+    while (ss > 1 && (outW * ss > max || outH * ss > max)) ss -= 1;
+    const w = Math.min(max, Math.round(outW * ss)), h = Math.min(max, Math.round(outH * ss));
+
+    const { fbo, tex, rbo } = this._renderTarget(w, h);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.deleteFramebuffer(fbo); gl.deleteTexture(tex); gl.deleteRenderbuffer(rbo);
+      throw new Error('snapshot: framebuffer incomplete (size too large?)');
+    }
+    gl.clearColor(this.bg[0], this.bg[1], this.bg[2], transparent ? 0 : 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    this._renderScene(w, h);
+
+    const pixels = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+    // restore the live framebuffer + clear color; repaint on the next frame
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.clearColor(...this.bg);
+    gl.deleteFramebuffer(fbo); gl.deleteTexture(tex); gl.deleteRenderbuffer(rbo);
+    this._dirty = true;
+
+    // raw pixels (bottom-left origin) -> temp canvas, then flip + downscale to out
+    const tmp = document.createElement('canvas');
+    tmp.width = w; tmp.height = h;
+    tmp.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer), w, h), 0, 0);
+    const out = document.createElement('canvas');
+    out.width = outW; out.height = outH;
+    const ctx = out.getContext('2d');
+    ctx.scale(1, -1);                          // WebGL readPixels origin is bottom-left
+    ctx.drawImage(tmp, 0, -outH, outW, outH);  // flip upright + downscale (bilinear AA)
+    return new Promise((resolve) => out.toBlob(resolve, type, quality));
   }
 }

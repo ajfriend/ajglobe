@@ -32,7 +32,7 @@
   </span>
   <span style="margin-left:6px">
     <button id="np">north pole</button><button id="am">antimeridian</button>
-    <button id="recolor">recolor</button><button id="fade">fade</button><button id="coast">coastlines</button>
+    <button id="recolor">recolor</button><button id="fade">fade</button><button id="coast">coastlines</button><button id="save">save PNG</button>
   </span>
   <span id="status">loading…</span>
   <span id="cursor" style="display:block;margin-top:4px;color:#7d8b99">move over the globe…</span>
@@ -129,6 +129,15 @@ function placePin(){
   pinEl.style.left = p.x + 'px'; pinEl.style.top = p.y + 'px';
 }
 orb.on('viewchange', placePin);
+// Static export: render the current view to a high-res PNG and download it.
+document.getElementById('save').onclick = async ()=>{
+  const blob = await orb.snapshot({ width: 2000 });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'ajglobe.png';
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
 const cursorEl = document.getElementById('cursor');
 orb.on('hover', e =>
   cursorEl.textContent = e.lng == null ? 'off globe'
