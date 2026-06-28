@@ -165,6 +165,22 @@ function geojsonLines(gj) {
   return { lnglat: new Float32Array(lng), starts: new Uint32Array(starts) };
 }
 
+// d3-geo's geoStitch, loaded lazily from a CDN the first time borders() needs it
+// (pay-per-use — the core ships no dependency). It un-cuts the antimeridian/polar
+// splits that GeoJSON polygons carry for 2D validity (Russia, Antarctica), turning
+// them back into proper spherical rings — which is what we draw. Cached after load.
+let _stitch;
+async function loadStitch() {
+  if (!_stitch) _stitch = (await import('https://cdn.jsdelivr.net/npm/d3-geo-projection@4/+esm')).geoStitch;
+  return _stitch;
+}
+// Apply a geoStitch fn per feature-geometry (robust across GeoJSON shapes).
+function applyStitch(geoStitch, gj) {
+  if (gj.type !== 'FeatureCollection') return geoStitch(gj);
+  return { type: 'FeatureCollection', features: gj.features.map((f) =>
+    f.geometry ? { ...f, geometry: geoStitch(f.geometry) } : f) };
+}
+
 // UV sphere triangle mesh, radius r.
 function uvSphere(r, slices = 64, stacks = 32) {
   const pos = [], idx = [];
@@ -558,17 +574,25 @@ export class Orb {
   // Batteries-included reference geometry (Natural Earth), fetched from a CDN and
   // drawn via lines() — the library bundles no data. detail: '110m' | '50m' | '10m'.
   // baseUrl overrides the default CDN (e.g. self-hosted GeoJSON). Returns the layer.
-  async coastlines(opts = {}) { return this._neLines('coastline', '#000000', 1.5, opts); }
+  async coastlines(opts = {}) { return this._neLines('coastline', '#000000', 1.5, false, opts); }
   // Full country outlines (admin-0 country polygons → ring polylines), so borders
   // read as complete shapes on their own (coast included), not just inter-country
   // land boundaries. Pair with coastlines() and the shared coast slightly overdraws.
-  async borders(opts = {}) { return this._neLines('admin_0_countries', '#c2185b', 1.2, opts); }
+  // Stitched by default (un-cuts the antimeridian/polar splits); `stitch:false` to
+  // skip, or `stitch: geoStitch` to inject your own (offline / no CDN).
+  async borders(opts = {}) { return this._neLines('admin_0_countries', '#c2185b', 1.2, true, opts); }
 
-  async _neLines(layer, defColor, defWidth, { detail = '50m', color, width, baseUrl } = {}) {
+  async _neLines(layer, defColor, defWidth, defStitch, { detail = '50m', color, width, baseUrl, stitch } = {}) {
     const url = `${baseUrl || DEFAULT_NE}/ne_${detail}_${layer}.geojson`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`ajglobe: failed to load ${url} (${res.status})`);
-    const { lnglat, starts } = geojsonLines(await res.json());
+    let gj = await res.json();
+    const want = stitch === undefined ? defStitch : stitch;
+    if (want) {
+      try { gj = applyStitch(typeof want === 'function' ? want : await loadStitch(), gj); }
+      catch (e) { console.warn('ajglobe: geoStitch unavailable, drawing raw polygons —', e.message); }
+    }
+    const { lnglat, starts } = geojsonLines(gj);
     return this.lines({ lnglat, starts, color: color || defColor, width: width || defWidth });
   }
 

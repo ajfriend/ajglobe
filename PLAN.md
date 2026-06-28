@@ -193,10 +193,13 @@ substrate from M2.
         borders read as complete country shapes alone (not just inter-country land
         boundaries, which leave gaps at every coast). `geojsonLines()` flattens
         LineString/MultiLineString **and** Polygon/MultiPolygon rings.
-  - [x] note: antimeridian/pole-spanning countries render correctly with no unwrap
-        — verified for `borders()` (admin_0_countries): Russia far-east / Pacific
-        clean; Antarctica is a full outline with only a tiny polygon-closure stub
-        at the dateline. That's the point of drawing in 3D.
+  - [x] **antimeridian/pole splits un-cut via geoStitch** (default for `borders()`).
+        GeoJSON polygons are split at ±180° and closed at the poles for 2D validity
+        (Russia → a dateline edge, Antarctica → a polar stub). `borders()` lazily
+        loads **`d3-geo-projection`'s `geoStitch`** from a CDN (pay-per-use; the core
+        ships no dep) and un-cuts them back into spherical rings before drawing —
+        `stitch:false` skips it, `stitch: fn` injects your own (offline). Verified:
+        Antarctica is a clean polar ring (stub gone) and the Bering/Pacific is clean.
   - [x] demo: `examples/reference-detail.html` — single globe, coastlines/borders
         toggles + 110m/50m/10m detail + view presets (Aegean/Britain/Europe/world).
   - [ ] more examples, README, `dist/` esbuild bundle, basic geometry unit tests
@@ -238,6 +241,10 @@ substrate from M2.
   ≈ 10 MB, ~2–3 MB gzipped by the CDN) + on-demand parse. *Production weight* is the
   app's call: pre-convert to the parse-free `pos/idx` binary, self-host, point
   `baseUrl` there (or feed `lines()` directly). Ship the mechanism, not the payload.
+  Same pattern for the one optional code dep: `borders()` lazily imports
+  `d3-geo-projection`'s `geoStitch` from a CDN on first use (un-cut antimeridian/
+  polar splits) — `package.json` stays zero-dep, nothing in `dist/`, and only
+  callers of stitched `borders()` pay for it (`stitch:false`/`stitch:fn` to opt out).
 - v1 must-haves: fills, thick AA strokes, solid background sphere, hover picking,
   reference outlines (**coastlines + country borders**). **Orthographic only** for v1.
 - Fill triangulation = **topology fan** (convex rings only — true of DGGS cells,

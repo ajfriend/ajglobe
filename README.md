@@ -60,7 +60,10 @@ await orb.borders({ detail: '10m', color: '#c2185b' });   // full country outlin
 
 `coastlines()` draws Natural Earth coastlines; `borders()` draws admin-0 country
 *polygons* as outlines (complete country shapes, coast included). `detail` is
-`'110m' | '50m' | '10m'`; both return a layer (`.remove()` to toggle). See
+`'110m' | '50m' | '10m'`; both return a layer (`.remove()` to toggle). `borders()`
+also un-cuts the antimeridian/polar splits that GeoJSON polygons carry (Russia,
+Antarctica) — it lazily loads `d3-geo-projection`'s `geoStitch` from a CDN on first
+use (no bundled dep; `stitch:false` to skip, `stitch: fn` to inject offline). See
 `examples/reference-detail.html` for a live detail comparison.
 Want it lighter or offline? Pass `baseUrl` to self-hosted GeoJSON, or feed your own
 data straight to `orb.lines({ lnglat, starts, color, width })` — the renderer takes
