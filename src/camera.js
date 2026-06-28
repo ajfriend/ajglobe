@@ -5,13 +5,13 @@
 import { vec3, quat, mat4, lnglatToVec3, vec3ToLngLat } from './glmath.js';
 
 export class Camera {
-  constructor(canvas, onChange) {
+  constructor(canvas, onChange, signal) {
     this.canvas = canvas;
     this.onChange = onChange;
     this.q = quat.identity();      // model orientation
     this.zoom = 1;                 // 1 == globe just fits
     this._drag = null;             // arcball drag state
-    this._attach();
+    this._attach(signal);          // signal (from Orb's AbortController) detaches on destroy
   }
 
   // Orthographic half-height in world units: globe radius 1 + ~5% margin,
@@ -30,14 +30,14 @@ export class Camera {
     return d2 <= 1 ? [x, y, Math.sqrt(1 - d2)] : vec3.norm([x, y, 0]);
   }
 
-  _attach() {
+  _attach(signal) {
     const c = this.canvas;
     c.addEventListener('pointerdown', (e) => {
       c.setPointerCapture(e.pointerId);
       // Track the previous ball vector so each move is an INCREMENTAL rotation
       // (not cumulative-from-start).
       this._drag = { v: this._ball(e.offsetX, e.offsetY) };
-    });
+    }, { signal });
     c.addEventListener('pointermove', (e) => {
       if (!this._drag) return;
       const v1 = this._ball(e.offsetX, e.offsetY);
@@ -45,18 +45,18 @@ export class Camera {
       this.q = quat.normalize(quat.multiply(delta, this.q));
       this._drag.v = v1;                   // advance reference -> per-move deltas
       this.onChange();
-    });
+    }, { signal });
     // Direct drag: the globe stops where you release it. (A time-normalized
     // momentum fling can return later as a tuned, opt-in feature; the naive
     // constant-decay version amplified tiny drags into a disorienting spin.)
     const end = () => { this._drag = null; };
-    c.addEventListener('pointerup', end);
-    c.addEventListener('pointercancel', end);
+    c.addEventListener('pointerup', end, { signal });
+    c.addEventListener('pointercancel', end, { signal });
     c.addEventListener('wheel', (e) => {
       e.preventDefault();
       this.zoom = Math.max(0.3, Math.min(50, this.zoom * Math.exp(-e.deltaY * 0.001)));
       this.onChange();
-    }, { passive: false });
+    }, { passive: false, signal });
   }
 
   // Point the camera at a given lng/lat (animation-free; sets orientation).

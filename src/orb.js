@@ -27,9 +27,14 @@ function compile(gl, type, src) {
 
 function program(gl, vs, fs) {
   const p = gl.createProgram();
-  gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vs));
-  gl.attachShader(p, compile(gl, gl.FRAGMENT_SHADER, fs));
+  const v = compile(gl, gl.VERTEX_SHADER, vs), f = compile(gl, gl.FRAGMENT_SHADER, fs);
+  gl.attachShader(p, v);
+  gl.attachShader(p, f);
   gl.linkProgram(p);
+  // Flag the shaders for deletion: they stay alive inside the linked program and
+  // are freed with it (gl.deleteProgram), so they don't leak after the link.
+  gl.deleteShader(v);
+  gl.deleteShader(f);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
     throw new Error('link: ' + gl.getProgramInfoLog(p));
   }
@@ -202,10 +207,14 @@ export class Orb {
     this.layers = [];
     this.lineLayers = [];
     this._handlers = { hover: [], click: [], viewchange: [] };
-    this.cam = new Camera(canvas, () => { this._invalidate(); this._emit('viewchange'); });
+    // One AbortController removes every canvas listener (Orb's + Camera's) on destroy().
+    this._destroyed = false;
+    this._abort = new AbortController();
+    const signal = this._abort.signal;
+    this.cam = new Camera(canvas, () => { this._invalidate(); this._emit('viewchange'); }, signal);
     this._dirty = true;
-    canvas.addEventListener('pointermove', (e) => this._emitPointer('hover', e));
-    canvas.addEventListener('click', (e) => this._emitPointer('click', e));
+    canvas.addEventListener('pointermove', (e) => this._emitPointer('hover', e), { signal });
+    canvas.addEventListener('click', (e) => this._emitPointer('click', e), { signal });
 
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
@@ -216,9 +225,28 @@ export class Orb {
     gl.clearColor(...this.bg);
 
     this._resize();
-    new ResizeObserver(() => { this._resize(); this._invalidate(); }).observe(canvas);
-    const loop = () => { this._frame(); requestAnimationFrame(loop); };
-    requestAnimationFrame(loop);
+    this._resizeObs = new ResizeObserver(() => { this._resize(); this._invalidate(); });
+    this._resizeObs.observe(canvas);
+    const loop = () => { if (this._destroyed) return; this._frame(); this._raf = requestAnimationFrame(loop); };
+    this._raf = requestAnimationFrame(loop);
+  }
+
+  // Tear down: stop the render loop, detach every listener, and free all GPU
+  // resources. Call when removing the globe (component unmount, route change).
+  // Idempotent; the Orb is unusable afterwards. The WebGL context is left intact
+  // so the same canvas can host a new Orb.
+  destroy() {
+    if (this._destroyed) return;
+    this._destroyed = true;
+    cancelAnimationFrame(this._raf);
+    this._abort.abort();              // removes all canvas listeners (Orb + Camera)
+    this._resizeObs.disconnect();
+    const gl = this.gl;
+    [...this.layers, ...this.lineLayers].forEach((l) => l.remove());   // VAOs, buffers, style textures
+    if (this._pick) { this._freeTarget(this._pick); this._pick = null; }
+    gl.deleteVertexArray(this.sphereVAO);
+    this._sphereBuffers.forEach((b) => gl.deleteBuffer(b));
+    for (const p of [this.fillProg, this.sphereProg, this.strokeProg, this.pickProg]) gl.deleteProgram(p);
   }
 
   // Create an ARRAY_BUFFER and wire it to a vertex attribute on the bound VAO.
@@ -317,8 +345,9 @@ export class Orb {
     this.sphereCount = m.idx.length;
     this.sphereVAO = gl.createVertexArray();
     gl.bindVertexArray(this.sphereVAO);
-    this._attrib(this.sphereProg, 'a_pos', m.pos, 3);
-    this._elements(m.idx);
+    const pb = this._attrib(this.sphereProg, 'a_pos', m.pos, 3);
+    const ib = this._elements(m.idx);
+    this._sphereBuffers = [pb, ib];   // kept so destroy() can free them
     gl.bindVertexArray(null);
   }
 

@@ -122,6 +122,7 @@ orb.highlight(index);              // tint one fill feature (-1 = none)
 orb.on('hover'|'click'|'viewchange', cb);          // hover/click: {x,y,lng,lat,index,layer}
 await orb.snapshot({ width, height, supersample, transparent, type });  // -> PNG Blob
 orb.stats;                         // {cells, verts}
+orb.destroy();                     // stop the loop, detach listeners, free all GPU resources
 ```
 Planned additions (picking index in hover/click; per-feature stroke width; points()).
 
