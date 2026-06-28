@@ -122,6 +122,7 @@ export class Orb {
     this._buildSphere();
 
     this.layers = [];
+    this.lineLayers = [];
     this.cam = new Camera(canvas, () => { this._dirty = true; });
     this._dirty = true;
 
@@ -292,6 +293,55 @@ export class Orb {
     return layer;
   }
 
+  // Add a polyline layer drawn as thin GL_LINES (SPIKE — thick AA strokes and
+  // great-circle densification are M3/M5). Reuses the sphere program. Vertices
+  // ride at radius ~1.0015 so lines sit just above fills yet still depth-test
+  // against the sphere (back-hemisphere lines hidden). Drawn in 3D, so the
+  // antimeridian is just adjacent points on the sphere — no unwrap.
+  //   xyz | lnglat : Float32Array positions (3/vertex or 2/vertex)
+  //   starts       : Uint32Array polyline start indices (len = nLines + 1)
+  //   color        : '#rrggbb' | [r,g,b,a]
+  lines({ xyz, lnglat, starts, color = '#ffffff' }) {
+    const gl = this.gl;
+    const nLines = starts.length - 1;
+    const nVerts = xyz ? xyz.length / 3 : lnglat.length / 2;
+    const R = 1.0015;
+
+    const pos = new Float32Array(nVerts * 3);
+    for (let v = 0; v < nVerts; v++) {
+      if (xyz) { pos[v * 3] = xyz[v * 3]; pos[v * 3 + 1] = xyz[v * 3 + 1]; pos[v * 3 + 2] = xyz[v * 3 + 2]; }
+      else lnglatToVec3Into(pos, v * 3, lnglat[v * 2], lnglat[v * 2 + 1]);
+      pos[v * 3] *= R; pos[v * 3 + 1] *= R; pos[v * 3 + 2] *= R;
+    }
+
+    // GL_LINES index: each polyline [s,e) becomes its (j, j+1) segments.
+    let segs = 0;
+    for (let l = 0; l < nLines; l++) segs += Math.max(0, starts[l + 1] - starts[l] - 1);
+    const idx = new Uint32Array(segs * 2);
+    let t = 0;
+    for (let l = 0; l < nLines; l++) {
+      for (let j = starts[l], e = starts[l + 1]; j < e - 1; j++) { idx[t++] = j; idx[t++] = j + 1; }
+    }
+
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const pb = this._attrib(this.sphereProg, 'a_pos', pos, 3);
+    const ib = this._elements(idx);
+    gl.bindVertexArray(null);
+
+    const col = hexRGBA(color).map((x) => x / 255);
+    const layer = { vao, count: idx.length, nLines, nVerts, color: col, _buffers: [pb, ib] };
+    layer.remove = () => {
+      this.lineLayers = this.lineLayers.filter((l) => l !== layer);
+      gl.deleteVertexArray(vao);
+      layer._buffers.forEach((b) => gl.deleteBuffer(b));
+      this._dirty = true;
+    };
+    this.lineLayers.push(layer);
+    this._dirty = true;
+    return layer;
+  }
+
   lookAt(lng, lat) { this.cam.lookAt(lng, lat); }
   get stats() {
     return {
@@ -336,6 +386,17 @@ export class Orb {
       gl.uniform1i(this.fillU.styleW, l.styleW);
       gl.bindVertexArray(l.vao);
       gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
+    }
+
+    // 3) line overlays (thin GL_LINES; reuse the sphere program for flat color)
+    if (this.lineLayers.length) {
+      gl.useProgram(this.sphereProg);
+      gl.uniformMatrix4fv(this.sphereU.mvp, false, mvp);
+      for (const l of this.lineLayers) {
+        gl.uniform4f(this.sphereU.color, l.color[0], l.color[1], l.color[2], l.color[3]);
+        gl.bindVertexArray(l.vao);
+        gl.drawElements(gl.LINES, l.count, gl.UNSIGNED_INT, 0);
+      }
     }
     gl.bindVertexArray(null);
   }

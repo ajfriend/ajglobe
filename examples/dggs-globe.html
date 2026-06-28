@@ -27,7 +27,7 @@
   </span>
   <span style="margin-left:6px">
     <button id="np">north pole</button><button id="am">antimeridian</button>
-    <button id="recolor">recolor</button>
+    <button id="recolor">recolor</button><button id="coast">coastlines</button>
   </span>
   <span id="status">loading…</span>
 </div>
@@ -89,6 +89,20 @@ for(const r of [5,6]) document.getElementById('r'+r).onclick = (e)=>{
 };
 document.getElementById('np').onclick = ()=>orb.lookAt(0,90);
 document.getElementById('am').onclick = ()=>orb.lookAt(180,0);
+// Coastlines (Natural Earth 110m) as a thin GL_LINES overlay — toggle on/off.
+let coast = null, coastData = null;
+document.getElementById('coast').onclick = async (e)=>{
+  if(coast){ coast.remove(); coast = null; e.target.classList.remove('on'); return; }
+  if(!coastData){
+    const [pos, starts] = await Promise.all([
+      bin('ne_110m_coast_pos.f32', Float32Array),
+      bin('ne_110m_coast_idx.u32', Uint32Array),
+    ]);
+    coastData = { pos, starts };
+  }
+  coast = orb.lines({ lnglat: coastData.pos, starts: coastData.starts, color: '#e6edf3' });
+  e.target.classList.add('on');
+};
 // Restyle in place — rewrites the per-feature style texture only, no re-tessellation.
 document.getElementById('recolor').onclick = ()=>{
   if(!layer) return;
