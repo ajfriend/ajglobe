@@ -1,14 +1,38 @@
 {
   "name": "ajglobe",
   "version": "0.0.1",
-  "description": "Correct, fast orthographic globe rendering for polygons and lines — no antimeridian or pole hacks, by construction.",
+  "description": "Correct, fast orthographic globe rendering for polygons, lines and points — no antimeridian or pole hacks, by construction.",
   "type": "module",
-  "main": "src/orb.js",
-  "exports": { ".": "./src/orb.js" },
-  "files": ["src", "README.md", "LICENSE"],
+  "main": "./dist/ajglobe.min.js",
+  "module": "./dist/ajglobe.min.js",
+  "exports": {
+    ".": "./dist/ajglobe.min.js",
+    "./src/orb.js": "./src/orb.js"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "serve": "python3 -m http.server 8080",
-    "build": "esbuild src/orb.js --bundle --format=esm --minify --outfile=dist/ajglobe.min.js"
+    "test": "node --test",
+    "build": "esbuild src/orb.js --bundle --format=esm --minify --sourcemap --external:https://* --outfile=dist/ajglobe.min.js && esbuild src/orb.js --bundle --format=iife --global-name=ajglobe --minify --sourcemap --external:https://* --outfile=dist/ajglobe.iife.min.js",
+    "prepack": "npm run build"
   },
-  "license": "MIT"
+  "keywords": [
+    "globe",
+    "orthographic",
+    "webgl2",
+    "geojson",
+    "map",
+    "dggs",
+    "visualization"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  }
 }

@@ -9,3 +9,11 @@ default:
 test port="8080":
     @echo "→ http://localhost:{{port}}/examples/dggs-globe.html"
     uv run -m http.server {{port}} -d {{justfile_directory()}}
+
+# Run the geometry unit tests (Node's built-in runner; zero deps).
+unit:
+    node --test
+
+# Build the dist/ bundles (ESM + IIFE, minified). One-time setup: `npm install`.
+build:
+    npm run build

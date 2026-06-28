@@ -217,7 +217,7 @@ const DEFAULT_NE = 'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@v5.
 // Flatten a GeoJSON FeatureCollection into the layout orb.lines() wants:
 // { lnglat:[lng,lat,...], starts:[polyline start indices] }. Lines map directly;
 // polygon rings (exterior + holes) each become a closed polyline outline.
-function geojsonLines(gj) {
+export function geojsonLines(gj) {
   const lng = [], starts = [0];
   const push = (coords) => { for (const c of coords) lng.push(c[0], c[1]); starts.push(lng.length / 2); };
   for (const f of (gj.features || [])) {
