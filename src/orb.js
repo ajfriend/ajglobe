@@ -743,15 +743,9 @@ export class Orb {
 
   lookAt(lng, lat) { this.cam.lookAt(lng, lat); }
 
-  // View snapshot for save/restore, deep-link, or syncing two globes.
-  // getView() -> { q, zoom } (the exact, fast form; q is copied). setView({ q?, zoom? })
-  //   applies it and is idempotent — re-applying the current view is a no-op, so a
-  //   viewchange->setView sync loop self-terminates with no guard flag (see
-  //   examples/dggs-compare.html).
-  // For a human-readable view, compose with the pure converters: quatToLngLat(q) ->
-  //   { lng, lat, roll } and lnglatToQuat(lng, lat, roll) -> q (re-exported below).
-  //   e.g. orb.setView({ q: lnglatToQuat(-3, 55, 0), zoom: 5 }); save a found view with
-  //   const { q, zoom } = orb.getView(); ({ ...quatToLngLat(q), zoom }).
+  // View get/set, delegated to the camera (see camera.js for the { q, zoom } contract +
+  // idempotence). For human-readable views, compose with the re-exported lnglatToQuat /
+  // quatToLngLat converters.
   getView() { return this.cam.getView(); }
   setView(v) { this.cam.setView(v); }
 

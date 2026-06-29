@@ -107,8 +107,8 @@ export class Camera {
   // without a guard flag — the echoed setView lands a bit-identical view and no-ops.
   setView({ q, zoom } = {}) {
     const nq = q ?? this.q, nz = zoom ?? this.zoom;
-    if (nz === this.zoom && nq.length === this.q.length && nq.every((v, i) => v === this.q[i])) return;
-    this.q = nq.slice();           // copy so a caller's array can't alias internal state
+    if (nz === this.zoom && nq.every((v, i) => v === this.q[i])) return;
+    if (q != null) this.q = nq.slice();   // copy only a caller-supplied array (can't alias)
     this.zoom = nz;
     this.onChange();
   }
