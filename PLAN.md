@@ -120,8 +120,10 @@ layer.remove();
 orb.lines({ lnglat|xyz, starts, color, width });   // thick AA great-circle strokes
 orb.points({ lnglat|xyz, color, size });           // round disc markers (per-feature)
 orb.lookAt(lng, lat);              // center a point, north up
-orb.getView();                     // -> {lng, lat, roll, zoom, q}  readable + exact
-orb.setView({ lng, lat, roll?, zoom? } | { q, zoom? });   // human or exact; idempotent
+orb.getView();                     // -> {q, zoom}   exact, fast view
+orb.setView({ q?, zoom? });        // apply a view; idempotent (echo no-ops)
+lnglatToQuat(lng, lat, roll?);     // pure (glmath): -> q   human orientation -> quaternion
+quatToLngLat(q);                   // pure (glmath): -> {lng, lat, roll}
 orb.project(lng, lat);             // -> {x, y, visible}  (canvas CSS px)
 orb.unproject(x, y);               // -> {lng, lat} | null
 orb.pick(x, y);                    // -> {layer, index} | null  (GPU color picking)
@@ -150,14 +152,17 @@ substrate from M2.
   - [x] `project(lng,lat)→{x,y,visible}` / `unproject(x,y)→{lng,lat}` — ortho
         ray ∩ unit sphere; inv(MVP) lands in object space directly. Verified:
         project∘unproject roundtrips to err 0; back-hemisphere `visible:false`.
-  - [x] `getView()→{lng,lat,roll,zoom,q}` / `setView({lng,lat,roll,zoom} | {q,zoom})` —
-        a view as both a human-readable chart (center + screen twist + zoom, for
-        hard-coding a view found interactively) and the exact quaternion `q` (lossless
-        round-trip; q wins on input). `lookAt` is north-up sugar (roll 0). `setView`
-        is idempotent (re-applying the current view no-ops), so a `viewchange`→`setView`
-        sync loop self-terminates without a guard flag. Roll read from where local
-        north lands in view space; lng/roll degenerate at the poles, q does not.
-        Verified: round-trip + roll + idempotence unit tests; two-globe headless sync.
+  - [x] `getView()→{q,zoom}` / `setView({q?,zoom?})` — one canonical view format (the
+        exact orientation + zoom), monomorphic and idempotent (re-applying the current
+        view no-ops), so a `viewchange`→`setView` sync loop self-terminates without a
+        guard flag. Human readability is *composition*, not an overload: pure converters
+        `lnglatToQuat(lng,lat,roll)` / `quatToLngLat(q)→{lng,lat,roll}` live in glmath
+        (beside `lnglatToVec3`/`vec3ToLngLat`) and translate just the rotation; `lookAt`
+        is `lnglatToQuat(.,.,0)` sugar. Roll = angle of local north from screen-up;
+        lng/roll degenerate at the poles, q does not. (Core speaks one format; convert
+        at the edges — avoids a multi-shape `setView` footgun.) Verified: converter
+        round-trip + roll unit tests (glmath), camera {q,zoom} round-trip + north-up
+        lookAt + idempotence (camera), two-globe headless sync.
   - [x] event emitter: `on('hover'|'click'|'viewchange', cb)` → unsubscribe fn.
         hover/click payload `{x,y,lng,lat,index}` (lng/lat null off-globe; index
         reserved for M4 picking). Example: DOM pin via `project()` + cursor readout.

@@ -57,19 +57,26 @@ orb.points({
 orb.lookAt(180, 0);   // center a lng/lat under the viewer
 orb.on('hover', e => { /* e.index = feature under the cursor (GPU picking) */ });
 
-orb.getView();   // -> { lng, lat, roll, zoom, q }
-orb.setView({ lng: -3, lat: 55, zoom: 5 });   // human form (north up; roll optional)
-orb.setView(orb.getView());                    // exact round-trip (q wins); idempotent
+orb.getView();              // -> { q, zoom }   the exact, fast view
+orb.setView({ q, zoom });   // apply it; idempotent (re-applying the current view no-ops)
 ```
 
-`getView()` hands back both a **human-readable** view — `lng`/`lat` (the point at
-screen center), `roll` (screen twist, 0 = north up), `zoom` — *and* `q`, the exact
-orientation. Read the human fields to hard-code a view you found by dragging; pass the
-whole object back for a lossless restore. `setView()` takes either form
-(`{lng,lat,roll,zoom}` or `{q,zoom}`); omitted fields are kept.
+A view is `{ q, zoom }` — `q` is the exact orientation (a unit quaternion), `zoom` the
+orthographic zoom. For a **human-readable** form, compose with the pure converters
+(`import { lnglatToQuat, quatToLngLat } from 'ajglobe'`), which translate just the
+rotation to/from `{ lng, lat, roll }` (center point + screen twist in degrees, 0 = north
+up):
 
-That makes **syncing two globes** a two-liner — no internals, no re-entrancy guard
-(the idempotent `setView` swallows the echo):
+```js
+orb.setView({ q: lnglatToQuat(-3, 55, 0), zoom: 5 });   // set a view from lng/lat
+orb.lookAt(-3, 55);                                      // …or this for the common case
+
+const { q, zoom } = orb.getView();                       // save a view you found by dragging:
+console.log({ ...quatToLngLat(q), zoom });               // { lng, lat, roll, zoom } — hard-code it
+```
+
+And **syncing two globes** is a two-liner — no internals, no re-entrancy guard (the
+idempotent `setView` swallows the echo):
 
 ```js
 a.on('viewchange', () => b.setView(a.getView()));

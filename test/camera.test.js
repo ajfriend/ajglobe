@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Camera } from '../src/camera.js';
-import { vec3, quat, lnglatToVec3 } from '../src/glmath.js';
+import { vec3, quat, lnglatToVec3, quatToLngLat } from '../src/glmath.js';
 
 // Stub only what Camera actually touches: a bounding rect, addEventListener +
 // setPointerCapture (from _attach), and a settable tabIndex.
@@ -53,53 +53,24 @@ test('getView/setView round-trips a view exactly (and the snapshot is a copy)', 
   const cam = newCam();
   cam.lookAt(25, 40);
   cam.setView({ zoom: 2.5 });
-  const snap = cam.getView();                         // remember this view
+  const snap = cam.getView();                         // { q, zoom }
   cam.lookAt(-100, -10);                              // move away
   assert.notDeepEqual(cam.getView(), snap);
-  cam.setView(snap);                                  // restore (q present -> exact)
+  cam.setView(snap);                                  // restore
   assert.deepEqual(cam.getView(), snap);
   snap.q[0] = 999;                                    // mutating the snapshot must not leak in
   assert.notEqual(cam.q[0], 999);
 });
 
-test('getView is human-readable: lookAt centers the point, north up (roll ~ 0)', () => {
+test('lookAt centers the point with north up (roll ~ 0, via quatToLngLat)', () => {
   const cam = newCam();
   for (const [lng, lat] of [[0, 0], [25, 40], [-100, -10], [140, 60]]) {
     cam.lookAt(lng, lat);
-    const v = cam.getView();
+    const v = quatToLngLat(cam.getView().q);
     const err = vec3.angle(lnglatToVec3(lng, lat), lnglatToVec3(v.lng, v.lat));
     assert.ok(err < 1e-5, `center off by ${err} rad`);            // centered point recovered
     assert.ok(Math.abs(v.roll) < 1e-4, `roll ${v.roll}° not ~0 after lookAt`);
   }
-});
-
-test('setView human form round-trips lng/lat/roll/zoom', () => {
-  const cam = newCam();
-  cam.setView({ lng: 30, lat: -15, roll: 25, zoom: 3 });
-  const v = cam.getView();
-  assert.ok(Math.abs(v.lng - 30) < 1e-4, `lng ${v.lng}`);
-  assert.ok(Math.abs(v.lat + 15) < 1e-4, `lat ${v.lat}`);
-  assert.ok(Math.abs(v.roll - 25) < 1e-4, `roll ${v.roll}`);
-  assert.equal(v.zoom, 3);
-});
-
-test('setView human form keeps omitted fields (roll-only twists in place)', () => {
-  const cam = newCam();
-  cam.setView({ lng: 50, lat: 10, zoom: 2 });
-  cam.setView({ roll: 90 });                          // only roll given
-  const v = cam.getView();
-  assert.ok(Math.abs(v.lng - 50) < 1e-4 && Math.abs(v.lat - 10) < 1e-4, 'center preserved');
-  assert.ok(Math.abs(v.roll - 90) < 1e-4, `roll ${v.roll}`);
-  assert.equal(v.zoom, 2, 'zoom preserved');
-});
-
-test('setView: explicit q wins over human fields', () => {
-  const cam = newCam();
-  cam.lookAt(45, 30);
-  const exact = cam.getView();
-  cam.lookAt(0, 0);
-  cam.setView({ ...exact, lng: -170, lat: -80 });     // q present -> lng/lat ignored
-  assert.deepEqual(cam.getView(), exact);
 });
 
 test('setView is idempotent: re-applying the current view does not emit', () => {

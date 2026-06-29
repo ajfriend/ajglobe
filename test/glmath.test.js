@@ -1,7 +1,7 @@
 // Geometry-math unit tests (Node's built-in runner: `node --test`).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { vec3, quat, mat4, lnglatToVec3, vec3ToLngLat } from '../src/glmath.js';
+import { vec3, quat, mat4, lnglatToVec3, vec3ToLngLat, lnglatToQuat, quatToLngLat } from '../src/glmath.js';
 
 const EPS = 1e-6;
 const close = (a, b, eps = EPS) => assert.ok(Math.abs(a - b) <= eps, `${a} ≈ ${b}`);
@@ -25,6 +25,23 @@ test('lnglatToVec3 ∘ vec3ToLngLat roundtrips (incl. antimeridian, neg lng)', (
   }
   // at the pole lng is degenerate; only latitude is meaningful
   close(vec3ToLngLat(lnglatToVec3(123, 90)).lat, 90, 1e-4);
+});
+
+test('lnglatToQuat ∘ quatToLngLat roundtrips lng/lat/roll', () => {
+  for (const [lng, lat, roll] of [[0, 0, 0], [30, -15, 25], [-100, 40, -60], [140, 60, 170], [-3, 55, 0]]) {
+    const v = quatToLngLat(lnglatToQuat(lng, lat, roll));
+    // center via vector angle (dodges lng wrap), roll directly
+    close(vec3.angle(lnglatToVec3(lng, lat), lnglatToVec3(v.lng, v.lat)), 0, 1e-5);
+    close(v.roll, roll, 1e-4);
+  }
+});
+
+test('lnglatToQuat: result is a unit quaternion; roll=0 is north up', () => {
+  for (const [lng, lat] of [[0, 0], [25, 40], [-100, -10]]) {
+    const q = lnglatToQuat(lng, lat);              // roll defaults to 0
+    close(Math.hypot(q[0], q[1], q[2], q[3]), 1);  // unit
+    close(quatToLngLat(q).roll, 0, 1e-4);          // north up
+  }
 });
 
 test('vec3.angle / norm', () => {

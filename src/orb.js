@@ -13,6 +13,11 @@
 // primitives — polygons (fills), lines (thick AA strokes), points (disc markers).
 
 import { lnglatToVec3, lnglatToVec3Into, vec3 } from './glmath.js';
+
+// Re-export the pure view converters so consumers get them from the package entry
+// alongside Orb (the core view format is { q, zoom }; these translate the rotation
+// part to/from a human-readable { lng, lat, roll }).
+export { lnglatToQuat, quatToLngLat } from './glmath.js';
 import { Camera } from './camera.js';
 
 function compile(gl, type, src) {
@@ -739,13 +744,14 @@ export class Orb {
   lookAt(lng, lat) { this.cam.lookAt(lng, lat); }
 
   // View snapshot for save/restore, deep-link, or syncing two globes.
-  // getView() -> { lng, lat, roll, zoom, q }: readable fields (center + screen twist
-  //   + zoom) to hard-code a view you found interactively, plus q, the exact unit
-  //   quaternion for a lossless round-trip.
-  // setView(v) accepts either { lng, lat, roll, zoom } (human; omitted fields kept)
-  //   or { q, zoom } (exact, q wins). It's idempotent — re-applying the current view
-  //   is a no-op, so a viewchange->setView sync loop self-terminates with no guard
-  //   flag (see examples/dggs-compare.html).
+  // getView() -> { q, zoom } (the exact, fast form; q is copied). setView({ q?, zoom? })
+  //   applies it and is idempotent — re-applying the current view is a no-op, so a
+  //   viewchange->setView sync loop self-terminates with no guard flag (see
+  //   examples/dggs-compare.html).
+  // For a human-readable view, compose with the pure converters: quatToLngLat(q) ->
+  //   { lng, lat, roll } and lnglatToQuat(lng, lat, roll) -> q (re-exported below).
+  //   e.g. orb.setView({ q: lnglatToQuat(-3, 55, 0), zoom: 5 }); save a found view with
+  //   const { q, zoom } = orb.getView(); ({ ...quatToLngLat(q), zoom }).
   getView() { return this.cam.getView(); }
   setView(v) { this.cam.setView(v); }
 

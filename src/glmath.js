@@ -102,6 +102,39 @@ export const quat = {
   },
 };
 
+const DEG = Math.PI / 180;
+
+// Object-space unit "north" (∂position/∂lat) at a lng/lat in degrees — the tangent
+// pointing toward the north pole. Used to define/read the screen roll of an orientation.
+function northAt(lngDeg, latDeg) {
+  const lng = lngDeg * DEG, lat = latDeg * DEG, s = Math.sin(lat);
+  return [-s * Math.cos(lng), -s * Math.sin(lng), Math.cos(lat)];
+}
+
+// (lng, lat, roll) degrees -> the model orientation (unit quaternion) that centers
+// that point on the view axis with the given screen roll (0 = north up). Inverse of
+// quatToLngLat. Two shortest-arc steps — center->+z, then lift north to screen-up —
+// then the roll about the view axis.
+export function lnglatToQuat(lngDeg, latDeg, rollDeg = 0) {
+  const center = lnglatToVec3(lngDeg, latDeg);
+  const q1 = quat.fromUnitVectors(center, [0, 0, 1]);                 // center -> +z
+  const n1 = quat.rotateVec3(q1, northAt(lngDeg, latDeg));            // north, now ⊥ +z
+  let q = quat.multiply(quat.fromUnitVectors(vec3.norm([n1[0], n1[1], 0]), [0, 1, 0]), q1);
+  if (rollDeg) q = quat.multiply(quat.fromAxisAngle([0, 0, 1], rollDeg * DEG), q);
+  return quat.normalize(q);
+}
+
+// Inverse of lnglatToQuat: a model orientation -> { lng, lat, roll } in degrees.
+// lng/lat is the geographic point at screen center (q⁻¹·+z); roll is the angle of
+// local north away from screen-up. lng/roll degenerate at the poles (lat = ±90).
+export function quatToLngLat(q) {
+  const [x, y, z, w] = q;
+  const center = quat.rotateVec3([-x, -y, -z, w], [0, 0, 1]);         // conjugate · +z
+  const { lng, lat } = vec3ToLngLat(center);
+  const nv = quat.rotateVec3(q, northAt(lng, lat));                   // north in view space
+  return { lng, lat, roll: Math.atan2(-nv[0], nv[1]) / DEG };
+}
+
 export const mat4 = {
   multiply(a, b) {
     const o = new Float32Array(16);
