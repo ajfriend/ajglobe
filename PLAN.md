@@ -352,6 +352,13 @@ substrate from M2.
   start indices (len = nCells+1), `_ar.f32` = Float32 aspect ratio per cell.
 - The ivea7h pole cell + antimeridian + 1.18M-cell perf is the permanent
   acceptance test: if it renders right and fast, the library is doing its job.
+- **Two-globe demo** `examples/dggs-compare.html`: two rotationally + zoom synced
+  globes (H3 res 1 vs res 2), cells colored by skar AR, hover → HUD with the H3 cell
+  id + AR. Shows multi-`Orb` use, GPU picking, and view-sync (no public setView() yet —
+  it copies `cam.q`/`cam.zoom` between globes and calls `cam.onChange()` behind a
+  `syncing` guard; a real `setView()` is a future API). Data from `scripts/`:
+  `gen_cells_geom.py` (native H3 → `h3_r{n}_pos.f32`/`_idx.u32`/`_ids.json`) +
+  `gen_cells_ar.py` (skar AR → `_ar.f32`, run in skar_py's env). All gitignored.
 
 ## 10. Open questions
 

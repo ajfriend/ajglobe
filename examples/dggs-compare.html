@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ajglobe — two synced H3 globes</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#fff;color:#333;
+    font:13px ui-monospace,Menlo,monospace;}
+  #wrap{display:flex;height:100%;}
+  .half{position:relative;flex:1;min-width:0;}
+  .half:first-child{border-right:1px solid #e6e6e6;}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block;
+    touch-action:none;cursor:grab;}
+  canvas:active{cursor:grabbing;}
+  canvas:focus{outline:none;}
+  .label{position:absolute;top:12px;left:16px;font-weight:700;pointer-events:none;}
+  .label small{font-weight:400;color:#8a8a8a;margin-left:6px;}
+  #hud{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:10;
+    background:#0b0e13ee;color:#cdd6e0;border:1px solid #2a323d;border-radius:9px;
+    padding:9px 15px;line-height:1.5;white-space:nowrap;}
+  #hud b{color:#fff;}
+  #hud .dim{color:#7d8b99;}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="half"><canvas id="left"></canvas><div class="label" id="lbl-left">H3</div></div>
+  <div class="half"><canvas id="right"></canvas><div class="label" id="lbl-right">H3</div></div>
+</div>
+<div id="hud"><span class="dim">drag either globe — they stay in sync — and hover a cell…</span></div>
+
+<script type="module">
+import { Orb } from '../src/orb.js';
+
+// viridis via 8 control stops (no d3) — same as the dggs-globe example.
+const STOPS = [[68,1,84],[71,44,122],[59,81,139],[44,113,142],
+               [33,144,141],[39,173,129],[92,200,99],[253,231,37]];
+function viridis(t){
+  t = Math.max(0, Math.min(1, t)) * (STOPS.length - 1);
+  const i = Math.min(STOPS.length - 2, t | 0), f = t - i, a = STOPS[i], b = STOPS[i+1];
+  return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f, 255];
+}
+function bisect(arr, x){ let lo=0, hi=arr.length; while(lo<hi){const m=(lo+hi)>>1; if(arr[m]<x)lo=m+1; else hi=m;} return lo; }
+async function bin(name, Ctor){ const b = await fetch(`data/${name}`).then(r=>{if(!r.ok)throw new Error(name+' '+r.status);return r.arrayBuffer();}); return new Ctor(b); }
+
+// One H3 globe: load its cell geometry + skar AR + ids, color cells by AR percentile.
+async function makeGlobe(canvasId, res){
+  const orb = new Orb(document.getElementById(canvasId), { background:'#ffffff', sphere:'#e0e6ed' });
+  const [pos, starts, ar] = await Promise.all([
+    bin(`h3_r${res}_pos.f32`, Float32Array),
+    bin(`h3_r${res}_idx.u32`, Uint32Array),
+    bin(`h3_r${res}_ar.f32`, Float32Array),
+  ]);
+  const ids = await fetch(`data/h3_r${res}_ids.json`).then(r=>r.json());
+  const sorted = Float64Array.from([...ar].filter(Number.isFinite)).sort();
+  orb.polygons({ lnglat: pos, starts, fill: i => {
+    const a = ar[i];
+    if(!Number.isFinite(a)) return [120,120,120,255];
+    return viridis(bisect(sorted, a) / (sorted.length - 1));
+  }});
+  orb.lookAt(10, 25);
+  return { orb, res, ar, ids };
+}
+
+const left = await makeGlobe('left', 1);
+const right = await makeGlobe('right', 2);
+document.getElementById('lbl-left').innerHTML  = `H3 <small>res 1 · ${left.ids.length.toLocaleString()} cells</small>`;
+document.getElementById('lbl-right').innerHTML = `H3 <small>res 2 · ${right.ids.length.toLocaleString()} cells</small>`;
+
+// Rotation + zoom sync: when one view changes, copy its orientation/zoom to the
+// other and trigger that globe's redraw. The `syncing` guard swallows the echo
+// viewchange so it doesn't bounce back. (No public setView() yet — uses cam.)
+let syncing = false;
+function sync(from, to){
+  if(syncing) return;
+  syncing = true;
+  to.orb.cam.q = from.orb.cam.q.slice();
+  to.orb.cam.zoom = from.orb.cam.zoom;
+  to.orb.cam.onChange();          // -> to._invalidate() + emits 'viewchange' (guarded)
+  syncing = false;
+}
+left.orb.on('viewchange',  () => sync(left, right));
+right.orb.on('viewchange', () => sync(right, left));
+
+// Hover HUD: pick the cell under the cursor and show its id + skar AR. e.index is a
+// lazy GPU pick; highlight() tints the hovered cell. Each globe reads its own data.
+const hud = document.getElementById('hud');
+const onHover = g => e => {
+  g.orb.highlight(e.index);
+  if(e.index == null){ hud.innerHTML = '<span class="dim">hover a cell…</span>'; return; }
+  hud.innerHTML = `<b>H3 r${g.res}</b> · cell <b>${g.ids[e.index]}</b> · skar AR <b>${g.ar[e.index].toFixed(4)}</b>`;
+};
+left.orb.on('hover', onHover(left));
+right.orb.on('hover', onHover(right));
+
+document.getElementById('left').focus();   // arrows/WASD rotate the focused globe (and sync the other)
+window.left = left; window.right = right;  // console / bench access
+</script>
+</body>
+</html>
