@@ -1,4 +1,4 @@
-// ajglobe — correct, fast orthographic globe rendering for polygons & lines.
+// ajglobe — correct, fast orthographic globe rendering for polygons, lines & points.
 //
 // The thesis: never parameterize to 2D. Vertices are points on the unit sphere
 // (lng/lat -> xyz once), fills are triangulated by ring TOPOLOGY (a fan over
@@ -7,10 +7,10 @@
 // they're just points, and a pole that lies inside a convex cell is covered by
 // that cell's fan like any other interior point.
 //
-// Milestone 1: filled convex polygons + background sphere + arcball/zoom.
-// M2: per-feature style substrate — each vertex carries a featureId; color lives
-// in a per-feature texture sampled by id, so a restyle (layer.update) touches
-// nFeatures texels, never the geometry. (Thick strokes, picking, lines come next.)
+// Per-feature style substrate: each vertex carries a featureId; color lives in a
+// per-feature texture sampled by id, so a restyle (layer.update) touches nFeatures
+// texels, never the geometry. The same featureId drives GPU picking. Three
+// primitives — polygons (fills), lines (thick AA strokes), points (disc markers).
 
 import { lnglatToVec3, lnglatToVec3Into, vec3 } from './glmath.js';
 import { Camera } from './camera.js';
@@ -208,6 +208,9 @@ function hexRGBA(c) {
   return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16),
           parseInt(h.slice(4, 6), 16), 255];
 }
+// Color -> 0..1 RGBA (GL float color). Coerce a value-or-fn into a fn.
+const rgbaF = (c) => hexRGBA(c).map((x) => x / 255);
+const asFn = (v) => (typeof v === 'function' ? v : () => v);
 
 // Default CDN for the coastlines()/borders() convenience helpers: Natural Earth
 // vector GeoJSON via jsDelivr, pinned to a release. No data is bundled — these are
@@ -275,50 +278,25 @@ export class Orb {
     const gl = canvas.getContext('webgl2', { antialias: true, depth: true });
     if (!gl) throw new Error('WebGL2 required');
     this.gl = gl;
-    this.bg = hexRGBA(opts.background || '#0b0e13').map((x, i) => i < 3 ? x / 255 : 1);
-    this.sphereColor = hexRGBA(opts.sphere || '#11151c').map((x) => x / 255);
+    this.bg = rgbaF(opts.background || '#0b0e13');
+    this.sphereColor = rgbaF(opts.sphere || '#11151c');
 
-    this.fillProg = program(gl, FILL_VS, FILL_FS);
-    this.sphereProg = program(gl, SPHERE_VS, SPHERE_FS);
-    this.strokeProg = program(gl, STROKE_VS, STROKE_FS);
-    this.pickProg = program(gl, FILL_VS, PICK_FS);   // same vertex stage as fills
-    this.pointProg = program(gl, POINT_VS, POINT_FS);
-    this.pointPickProg = program(gl, POINT_VS, POINTPICK_FS);   // same vertex stage as points
-    // Uniform locations are fixed after link — resolve once, not per frame.
-    this.fillU = {
-      mvp: gl.getUniformLocation(this.fillProg, 'u_mvp'),
-      style: gl.getUniformLocation(this.fillProg, 'u_style'),
-      styleW: gl.getUniformLocation(this.fillProg, 'u_styleW'),
-      hoverId: gl.getUniformLocation(this.fillProg, 'u_hoverId'),
+    // Programs + their uniform names (each is `u_<key>` in GLSL), built in one pass
+    // and stored as this.<name>Prog / this.<name>U (location maps, resolved once).
+    const PROGRAMS = {
+      fill:      [FILL_VS, FILL_FS,        ['mvp', 'style', 'styleW', 'hoverId']],
+      sphere:    [SPHERE_VS, SPHERE_FS,    ['mvp', 'color']],
+      stroke:    [STROKE_VS, STROKE_FS,    ['mvp', 'viewport', 'hw', 'color']],
+      pick:      [FILL_VS, PICK_FS,        ['mvp', 'idBase']],          // same vertex stage as fills
+      point:     [POINT_VS, POINT_FS,      ['mvp', 'viewport', 'dppx', 'style', 'styleW', 'hoverId']],
+      pointPick: [POINT_VS, POINTPICK_FS,  ['mvp', 'viewport', 'dppx', 'idBase']],   // same vertex stage as points
     };
-    this.pickU = {
-      mvp: gl.getUniformLocation(this.pickProg, 'u_mvp'),
-      idBase: gl.getUniformLocation(this.pickProg, 'u_idBase'),
-    };
-    this.pointU = {
-      mvp: gl.getUniformLocation(this.pointProg, 'u_mvp'),
-      viewport: gl.getUniformLocation(this.pointProg, 'u_viewport'),
-      dppx: gl.getUniformLocation(this.pointProg, 'u_dppx'),
-      style: gl.getUniformLocation(this.pointProg, 'u_style'),
-      styleW: gl.getUniformLocation(this.pointProg, 'u_styleW'),
-      hoverId: gl.getUniformLocation(this.pointProg, 'u_hoverId'),
-    };
-    this.pointPickU = {
-      mvp: gl.getUniformLocation(this.pointPickProg, 'u_mvp'),
-      viewport: gl.getUniformLocation(this.pointPickProg, 'u_viewport'),
-      dppx: gl.getUniformLocation(this.pointPickProg, 'u_dppx'),
-      idBase: gl.getUniformLocation(this.pointPickProg, 'u_idBase'),
-    };
-    this.sphereU = {
-      mvp: gl.getUniformLocation(this.sphereProg, 'u_mvp'),
-      color: gl.getUniformLocation(this.sphereProg, 'u_color'),
-    };
-    this.strokeU = {
-      mvp: gl.getUniformLocation(this.strokeProg, 'u_mvp'),
-      viewport: gl.getUniformLocation(this.strokeProg, 'u_viewport'),
-      hw: gl.getUniformLocation(this.strokeProg, 'u_hw'),
-      color: gl.getUniformLocation(this.strokeProg, 'u_color'),
-    };
+    this._progNames = Object.keys(PROGRAMS);
+    for (const [name, [vs, fs, keys]] of Object.entries(PROGRAMS)) {
+      const prog = program(gl, vs, fs);
+      this[name + 'Prog'] = prog;
+      this[name + 'U'] = Object.fromEntries(keys.map((k) => [k, gl.getUniformLocation(prog, 'u_' + k)]));
+    }
     this.dpr = 1;
     this._hoverId = -1;        // feature to highlight in the fills (-1 = none)
     this._pick = null;         // offscreen id-buffer { fbo, tex, rbo, w, h }
@@ -369,8 +347,17 @@ export class Orb {
     if (this._pick) { this._freeTarget(this._pick); this._pick = null; }
     gl.deleteVertexArray(this.sphereVAO);
     this._sphereBuffers.forEach((b) => gl.deleteBuffer(b));
-    for (const p of [this.fillProg, this.sphereProg, this.strokeProg, this.pickProg,
-      this.pointProg, this.pointPickProg]) gl.deleteProgram(p);
+    for (const n of this._progNames) gl.deleteProgram(this[n + 'Prog']);
+  }
+
+  // Free a layer's GPU resources (VAO, attribute/index buffers, style texture if
+  // any). Shared teardown for polygons()/lines()/points() remove(); the caller owns
+  // dropping the layer from its array and the right invalidation.
+  _freeLayer(layer) {
+    const gl = this.gl;
+    gl.deleteVertexArray(layer.vao);
+    layer._buffers.forEach((b) => gl.deleteBuffer(b));
+    if (layer.styleTex) gl.deleteTexture(layer.styleTex);
   }
 
   // Create an ARRAY_BUFFER and wire it to a vertex attribute on the bound VAO.
@@ -441,16 +428,15 @@ export class Orb {
   // that rewrites the texels without touching geometry. colorFn/fn: (i) => color.
   _makeStyle(n, colorFn) {
     const gl = this.gl;
-    const toFn = (f) => (typeof f === 'function' ? f : () => f);
     const maxTex = gl.getParameter(gl.MAX_TEXTURE_SIZE);
     const W = Math.min(maxTex, 4096);
     const H = Math.max(1, Math.ceil(n / W));
     if (H > maxTex) throw new Error(`too many features for one style texture: ${n}`);
-    const tex = this._styleTexture(W, H, this._buildStyle(n, W, H, toFn(colorFn)));
+    const tex = this._styleTexture(W, H, this._buildStyle(n, W, H, asFn(colorFn)));
     const restyle = (f) => {
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE,
-        this._buildStyle(n, W, H, toFn(f)));
+        this._buildStyle(n, W, H, asFn(f)));
       this._dirty = true;
     };
     return { tex, W, H, restyle };
@@ -589,9 +575,7 @@ export class Orb {
     layer.update = ({ fill: f } = {}) => { if (f != null) restyle(f); return layer; };
     layer.remove = () => {
       this.layers = this.layers.filter((l) => l !== layer);
-      gl.deleteVertexArray(vao);
-      layer._buffers.forEach((b) => gl.deleteBuffer(b));
-      gl.deleteTexture(styleTex);
+      this._freeLayer(layer);
       this._invalidate();
     };
     this.layers.push(layer);
@@ -654,13 +638,12 @@ export class Orb {
 
     const layer = {
       vao, count: IDX.length, nLines, width,
-      color: hexRGBA(color).map((x) => x / 255), _buffers: [pa, pb, pm, ib],
+      color: rgbaF(color), _buffers: [pa, pb, pm, ib],
     };
     layer.remove = () => {
       this.lineLayers = this.lineLayers.filter((x) => x !== layer);
-      gl.deleteVertexArray(vao);
-      layer._buffers.forEach((b) => gl.deleteBuffer(b));
-      this._dirty = true;
+      this._freeLayer(layer);
+      this._dirty = true;           // lines aren't pickable -> no pick-buffer invalidation
     };
     this.lineLayers.push(layer);
     this._dirty = true;
@@ -679,7 +662,7 @@ export class Orb {
     const gl = this.gl;
     const nPoints = xyz ? xyz.length / 3 : lnglat.length / 2;
     const R = 1.002;                              // lift above fills/strokes
-    const sizeFn = typeof size === 'function' ? size : () => size;
+    const sizeFn = asFn(size);
     const vec = (i) => this._posAt(xyz, lnglat, i);
 
     // 4 verts per point (a screen-space quad); the vertex shader billboards them.
@@ -717,9 +700,7 @@ export class Orb {
     layer.update = ({ color: c } = {}) => { if (c != null) restyle(c); return layer; };
     layer.remove = () => {
       this.pointLayers = this.pointLayers.filter((l) => l !== layer);
-      gl.deleteVertexArray(vao);
-      layer._buffers.forEach((b) => gl.deleteBuffer(b));
-      gl.deleteTexture(styleTex);
+      this._freeLayer(layer);
       this._invalidate();
     };
     this.pointLayers.push(layer);
@@ -764,8 +745,10 @@ export class Orb {
   unproject(x, y) { return this.cam.unproject(x, y); }
 
   // on('hover'|'click'|'viewchange', cb) -> unsubscribe fn.
-  // hover/click payload: { x, y, lng, lat, index } — lng/lat are null off-globe;
-  // index is reserved for M4 GPU picking (null until then). viewchange: no arg.
+  // hover/click payload: { x, y, lng, lat, index, layer } — lng/lat null off-globe;
+  // index/layer come from GPU picking (null off-globe / over no feature). They're
+  // lazy getters: a handler that reads only lng/lat triggers no pick (no GPU
+  // readback). viewchange: no arg.
   on(type, cb) {
     (this._handlers[type] ||= []).push(cb);
     return () => { this._handlers[type] = this._handlers[type].filter((f) => f !== cb); };
@@ -775,11 +758,16 @@ export class Orb {
     const hs = this._handlers[type];
     if (!hs || !hs.length) return;          // skip the work when nobody listens
     const g = this.cam.unproject(e.offsetX, e.offsetY);
-    const p = this.pick(e.offsetX, e.offsetY);
+    let pk, picked = false;                 // pick lazily — only if a handler reads index/layer
+    const pick = () => {
+      if (!picked) { pk = g ? this.pick(e.offsetX, e.offsetY) : null; picked = true; }
+      return pk;                            // null when off-globe (nothing under the pixel)
+    };
     this._emit(type, {
       x: e.offsetX, y: e.offsetY,
       lng: g ? g.lng : null, lat: g ? g.lat : null,
-      index: p ? p.index : null, layer: p ? p.layer : null,
+      get index() { return pick()?.index ?? null; },
+      get layer() { return pick()?.layer ?? null; },
     });
   }
 

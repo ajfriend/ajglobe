@@ -17,6 +17,10 @@ const KEY_AXIS = {
   ArrowRight: [0, 0, -1], KeyE: [0, 0, -1],
 };
 
+// The view matrix is constant (orthographic eye on +z looking at the origin) — the
+// globe's orientation lives entirely in the model quaternion. Compute it once.
+const VIEW = mat4.lookAt([0, 0, 3], [0, 0, 0], [0, 1, 0]);
+
 export class Camera {
   constructor(canvas, onChange, signal) {
     this.canvas = canvas;
@@ -96,9 +100,8 @@ export class Camera {
   mvp(aspect) {
     const s = this._halfExtent();
     const proj = mat4.ortho(-s * aspect, s * aspect, -s, s, 0.1, 10);
-    const view = mat4.lookAt([0, 0, 3], [0, 0, 0], [0, 1, 0]);
     const model = mat4.fromQuat(this.q);
-    return mat4.multiply(proj, mat4.multiply(view, model));
+    return mat4.multiply(proj, mat4.multiply(VIEW, model));
   }
 
   // Geographic point -> canvas CSS pixels. visible=false when the point is on
