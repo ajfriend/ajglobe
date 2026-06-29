@@ -56,6 +56,24 @@ orb.points({
 });
 orb.lookAt(180, 0);   // center a lng/lat under the viewer
 orb.on('hover', e => { /* e.index = feature under the cursor (GPU picking) */ });
+
+orb.getView();   // -> { lng, lat, roll, zoom, q }
+orb.setView({ lng: -3, lat: 55, zoom: 5 });   // human form (north up; roll optional)
+orb.setView(orb.getView());                    // exact round-trip (q wins); idempotent
+```
+
+`getView()` hands back both a **human-readable** view — `lng`/`lat` (the point at
+screen center), `roll` (screen twist, 0 = north up), `zoom` — *and* `q`, the exact
+orientation. Read the human fields to hard-code a view you found by dragging; pass the
+whole object back for a lossless restore. `setView()` takes either form
+(`{lng,lat,roll,zoom}` or `{q,zoom}`); omitted fields are kept.
+
+That makes **syncing two globes** a two-liner — no internals, no re-entrancy guard
+(the idempotent `setView` swallows the echo):
+
+```js
+a.on('viewchange', () => b.setView(a.getView()));
+b.on('viewchange', () => a.setView(b.getView()));
 ```
 
 ## Reference geometry (coastlines / borders)

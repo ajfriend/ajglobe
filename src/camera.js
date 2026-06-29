@@ -21,6 +21,27 @@ const KEY_AXIS = {
 // globe's orientation lives entirely in the model quaternion. Compute it once.
 const VIEW = mat4.lookAt([0, 0, 3], [0, 0, 0], [0, 1, 0]);
 
+const DEG = Math.PI / 180;
+
+// Object-space unit "north" (d position / d latitude) at a lng/lat in degrees —
+// the tangent pointing toward the north pole. Used to define/read screen roll.
+function northAt(lngDeg, latDeg) {
+  const lng = lngDeg * DEG, lat = latDeg * DEG, s = Math.sin(lat);
+  return [-s * Math.cos(lng), -s * Math.sin(lng), Math.cos(lat)];
+}
+
+// Build the model orientation that centers (lng,lat) on the view axis with the
+// given screen roll (degrees, 0 = north up). Two shortest-arc steps — center→+z,
+// then spin about the view axis to lift north to screen-up — then the roll.
+function orient(lngDeg, latDeg, rollDeg) {
+  const center = lnglatToVec3(lngDeg, latDeg);
+  const q1 = quat.fromUnitVectors(center, [0, 0, 1]);                  // center -> +z
+  const n1 = quat.rotateVec3(q1, northAt(lngDeg, latDeg));             // north, now ⊥ +z
+  let q = quat.multiply(quat.fromUnitVectors(vec3.norm([n1[0], n1[1], 0]), [0, 1, 0]), q1);
+  if (rollDeg) q = quat.multiply(quat.fromAxisAngle([0, 0, 1], rollDeg * DEG), q);
+  return quat.normalize(q);
+}
+
 export class Camera {
   constructor(canvas, onChange, signal) {
     this.canvas = canvas;
@@ -89,12 +110,59 @@ export class Camera {
     }, { signal });
   }
 
-  // Point the camera at a given lng/lat (animation-free; sets orientation).
+  // Point the camera at a given lng/lat (animation-free; sets orientation), north
+  // up. Sugar for setView({ lng, lat, roll: 0 }) keeping the current zoom.
   lookAt(lngDeg, latDeg) {
-    // Rotate so that (lng,lat) lands at the sub-viewer point (+z).
-    const target = lnglatToVec3(lngDeg, latDeg);
-    this.q = quat.fromUnitVectors(target, [0, 0, 1]);
+    this.q = orient(lngDeg, latDeg, 0);
     this.onChange();
+  }
+
+  // The view as both a human-readable chart AND the exact orientation:
+  //   { lng, lat, roll, zoom, q }
+  // lng/lat = the geographic point at screen center; roll = screen twist in
+  // degrees (0 = north up); zoom; q = the exact unit quaternion. The human fields
+  // are for reading / editing / hard-coding a view you found interactively; q is
+  // the lossless field — pass the whole object back to setView() to restore it
+  // bit-exactly (q wins). lng/roll degenerate at the poles (lat = ±90); q does not.
+  getView() {
+    const { lng, lat, roll } = this._decompose();
+    return { lng, lat, roll, zoom: this.zoom, q: this.q.slice() };
+  }
+
+  // Apply a view. Accepts either form (all fields optional):
+  //   { q, zoom }                 -> exact restore (q takes precedence)
+  //   { lng, lat, roll, zoom }    -> human form; omitted lng/lat/roll are kept
+  //                                  from the current orientation, north up by default
+  //   { zoom } / {}               -> zoom-only (or no-op), orientation untouched
+  // Idempotent: if the resulting view equals the current one exactly, do nothing
+  // (no redraw, no 'viewchange'). That makes a viewchange->setView sync loop
+  // self-terminate without a guard flag — the echoed setView({...q}) is a no-op.
+  setView(v = {}) {
+    const nz = v.zoom ?? this.zoom;
+    let nq;
+    if (v.q != null) {
+      nq = v.q;                                          // exact orientation wins
+    } else if (v.lng != null || v.lat != null || v.roll != null) {
+      const cur = this._decompose();                     // fill the omitted human fields
+      nq = orient(v.lng ?? cur.lng, v.lat ?? cur.lat, v.roll ?? cur.roll);
+    } else {
+      nq = this.q;                                        // zoom-only / empty
+    }
+    if (nz === this.zoom && nq.length === this.q.length && nq.every((x, i) => x === this.q[i])) return;
+    this.q = nq.slice();           // copy so a caller's array can't alias internal state
+    this.zoom = nz;
+    this.onChange();
+  }
+
+  // Read the current orientation as { lng, lat, roll } (degrees). The centered
+  // point is q⁻¹·(+z) (the object point that lands on the view axis); roll is the
+  // angle of local north away from screen-up after the model rotation.
+  _decompose() {
+    const [x, y, z, w] = this.q;
+    const center = quat.rotateVec3([-x, -y, -z, w], [0, 0, 1]);   // conjugate · +z
+    const { lng, lat } = vec3ToLngLat(center);
+    const nv = quat.rotateVec3(this.q, northAt(lng, lat));        // north in view space
+    return { lng, lat, roll: Math.atan2(-nv[0], nv[1]) / DEG };
   }
 
   mvp(aspect) {

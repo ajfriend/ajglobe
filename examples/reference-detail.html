@@ -51,7 +51,7 @@ const views = {
   europe:  [[15, 50], 3],
   world:   [[10, 25], 1],
 };
-const goTo = (v) => { const [ll, z] = views[v]; orb.cam.zoom = z; orb.lookAt(...ll); };
+const goTo = (v) => { const [ll, z] = views[v]; orb.setView({ zoom: z }); orb.lookAt(...ll); };
 goTo('aegean');
 
 // Keyboard rotation (arrows / WASD / QE) is scoped to the focused canvas — focus it

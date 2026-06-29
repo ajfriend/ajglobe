@@ -68,20 +68,11 @@ const right = await makeGlobe('right', 2);
 document.getElementById('lbl-left').innerHTML  = `H3 <small>res 1 · ${left.ids.length.toLocaleString()} cells</small>`;
 document.getElementById('lbl-right').innerHTML = `H3 <small>res 2 · ${right.ids.length.toLocaleString()} cells</small>`;
 
-// Rotation + zoom sync: when one view changes, copy its orientation/zoom to the
-// other and trigger that globe's redraw. The `syncing` guard swallows the echo
-// viewchange so it doesn't bounce back. (No public setView() yet — uses cam.)
-let syncing = false;
-function sync(from, to){
-  if(syncing) return;
-  syncing = true;
-  to.orb.cam.q = from.orb.cam.q.slice();
-  to.orb.cam.zoom = from.orb.cam.zoom;
-  to.orb.cam.onChange();          // -> to._invalidate() + emits 'viewchange' (guarded)
-  syncing = false;
-}
-left.orb.on('viewchange',  () => sync(left, right));
-right.orb.on('viewchange', () => sync(right, left));
+// Rotation + zoom sync: copy one globe's view to the other on every change.
+// setView() is idempotent, so the echoed viewchange lands an identical view and
+// no-ops — the loop self-terminates, no guard flag needed.
+left.orb.on('viewchange',  () => right.orb.setView(left.orb.getView()));
+right.orb.on('viewchange', () => left.orb.setView(right.orb.getView()));
 
 // Hover HUD: pick the cell under the cursor and show its id + skar AR. e.index is a
 // lazy GPU pick; highlight() tints the hovered cell. Each globe reads its own data.

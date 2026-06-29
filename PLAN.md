@@ -119,7 +119,9 @@ layer.update({ fill });            // restyle in place (no re-tessellation)
 layer.remove();
 orb.lines({ lnglat|xyz, starts, color, width });   // thick AA great-circle strokes
 orb.points({ lnglat|xyz, color, size });           // round disc markers (per-feature)
-orb.lookAt(lng, lat);
+orb.lookAt(lng, lat);              // center a point, north up
+orb.getView();                     // -> {lng, lat, roll, zoom, q}  readable + exact
+orb.setView({ lng, lat, roll?, zoom? } | { q, zoom? });   // human or exact; idempotent
 orb.project(lng, lat);             // -> {x, y, visible}  (canvas CSS px)
 orb.unproject(x, y);               // -> {lng, lat} | null
 orb.pick(x, y);                    // -> {layer, index} | null  (GPU color picking)
@@ -148,6 +150,14 @@ substrate from M2.
   - [x] `project(lng,lat)→{x,y,visible}` / `unproject(x,y)→{lng,lat}` — ortho
         ray ∩ unit sphere; inv(MVP) lands in object space directly. Verified:
         project∘unproject roundtrips to err 0; back-hemisphere `visible:false`.
+  - [x] `getView()→{lng,lat,roll,zoom,q}` / `setView({lng,lat,roll,zoom} | {q,zoom})` —
+        a view as both a human-readable chart (center + screen twist + zoom, for
+        hard-coding a view found interactively) and the exact quaternion `q` (lossless
+        round-trip; q wins on input). `lookAt` is north-up sugar (roll 0). `setView`
+        is idempotent (re-applying the current view no-ops), so a `viewchange`→`setView`
+        sync loop self-terminates without a guard flag. Roll read from where local
+        north lands in view space; lng/roll degenerate at the poles, q does not.
+        Verified: round-trip + roll + idempotence unit tests; two-globe headless sync.
   - [x] event emitter: `on('hover'|'click'|'viewchange', cb)` → unsubscribe fn.
         hover/click payload `{x,y,lng,lat,index}` (lng/lat null off-globe; index
         reserved for M4 picking). Example: DOM pin via `project()` + cursor readout.
@@ -354,9 +364,9 @@ substrate from M2.
   acceptance test: if it renders right and fast, the library is doing its job.
 - **Two-globe demo** `examples/dggs-compare.html`: two rotationally + zoom synced
   globes (H3 res 1 vs res 2), cells colored by skar AR, hover → HUD with the H3 cell
-  id + AR. Shows multi-`Orb` use, GPU picking, and view-sync (no public setView() yet —
-  it copies `cam.q`/`cam.zoom` between globes and calls `cam.onChange()` behind a
-  `syncing` guard; a real `setView()` is a future API). Data from `scripts/`:
+  id + AR. Shows multi-`Orb` use, GPU picking, and view-sync on the public API:
+  `a.on('viewchange', () => b.setView(a.getView()))` both ways — the idempotent
+  `setView` swallows the echo, so no guard flag. Data from `scripts/`:
   `gen_cells_geom.py` (native H3 → `h3_r{n}_pos.f32`/`_idx.u32`/`_ids.json`) +
   `gen_cells_ar.py` (skar AR → `_ar.f32`, run in skar_py's env). All gitignored.
 

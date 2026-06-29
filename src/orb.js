@@ -738,6 +738,17 @@ export class Orb {
 
   lookAt(lng, lat) { this.cam.lookAt(lng, lat); }
 
+  // View snapshot for save/restore, deep-link, or syncing two globes.
+  // getView() -> { lng, lat, roll, zoom, q }: readable fields (center + screen twist
+  //   + zoom) to hard-code a view you found interactively, plus q, the exact unit
+  //   quaternion for a lossless round-trip.
+  // setView(v) accepts either { lng, lat, roll, zoom } (human; omitted fields kept)
+  //   or { q, zoom } (exact, q wins). It's idempotent — re-applying the current view
+  //   is a no-op, so a viewchange->setView sync loop self-terminates with no guard
+  //   flag (see examples/dggs-compare.html).
+  getView() { return this.cam.getView(); }
+  setView(v) { this.cam.setView(v); }
+
   // Composition surface (the official overlay API): geo<->screen + events.
   // project(lng,lat) -> { x, y, visible }  (canvas CSS px; visible=false on back)
   // unproject(x,y)   -> { lng, lat } | null (null when the pixel misses the globe)
