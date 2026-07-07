@@ -142,6 +142,7 @@ layer.update({ fill });            // restyle in place (no re-tessellation)
 layer.remove();
 orb.lines({ lnglat|xyz, starts, color, width });   // thick AA great-circle strokes
 orb.graticule({ step?, latLimit?, color?, width? });  // meridian/parallel grid (sync; pure geometry)
+smallCircleLines({ center, radius });  // pure: closed ring at angular radius (range rings, parallels)
 orb.points({ lnglat|xyz, color, size });           // round disc markers (per-feature)
 orb.lookAt(lng, lat);              // center a point, north up
 orb.getView();                     // -> {q, zoom}   exact, fast view
@@ -253,11 +254,10 @@ substrate from M2.
         toggles + 110m/50m/10m detail + view presets (Aegean/Britain/Europe/world).
   - [x] `graticule()` overlay (added 2026-07-06, post-M5) — meridians/parallels
         every `step`° via pure `graticuleLines()` (exported, unit-tested; no
-        data, synchronous). Parallels are small circles, so the generator
-        samples them at 2° — the great-circle chords lines() draws then deviate
-        from the parallel by <1e-4 rad, sub-pixel at any zoom. Meridians span
-        ±latLimit (default 80°) so they don't pile up at the poles. Toggle in
-        `reference-detail.html`.
+        data, synchronous). Meridians are geodesics — two endpoints each,
+        lines() densifies them. Parallels come from `smallCircleLines()` (§7:
+        small-circle decision). Meridians span ±latLimit (default 80°) so they
+        don't pile up at the poles. Toggle in `reference-detail.html`.
   - [x] README (aligned to the §1 reframe; xyz/lnglat docs), `dist/` esbuild
         bundle (§9), geometry unit tests (glmath, camera, geojsonLines,
         subdivideTri — 25 passing). More examples stay nice-to-have; three ship
@@ -340,6 +340,22 @@ substrate from M2.
 - Fill triangulation = **topology fan** (convex rings only — true of DGGS cells,
   country borders, etc.); concave fills later.
 - **Minimal rendering core; UI composed on top** (§3).
+- **Small circles are sampled by a coordinate-free generator, not a renderer
+  mode** (2026-07-06). The renderer's contract stays "polylines of unit-sphere
+  anchors; segments are geodesics" — same implicit contract as GeoJSON. Two
+  rejected alternatives: a lat/lng-linear interpolation mode in `lines()`
+  (reintroduces the 2D parameterization + antimeridian wrap the thesis exists
+  to kill), and per-segment curve metadata (complicates the flat data model for
+  one consumer). Instead `smallCircleLines({center, radius})` samples the circle
+  in pure xyz (orthonormal frame around the axis — seam-free) with a *derived*
+  step: Δt = MAX_SEG/√sinθ bounds the drawn geodesic chords' deviation from the
+  circle by MAX_SEG²/8, the geodesic densifier's own chord budget — one fidelity
+  constant owns every curve, and at θ=90° (a great circle) the policy converges
+  to the geodesic one. (Replaced graticule's original flat 2° pre-sampling,
+  which was calibrated against renderer internals from the outside.) Public:
+  range/distance rings are one call. Perfectly-round small circles at extreme
+  zoom would need vertex-shader evaluation — same deferred trade as dynamic-LOD
+  geodesics (§7 geodesic-path substrate).
 - **Color scales in examples: linear value-based, never rank/percentile**
   (decided 2026-07-06). Rank equalizes density by construction, so on clustered
   data (DGGS aspect ratios) it amplifies sub-display-precision float noise into

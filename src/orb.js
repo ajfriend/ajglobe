@@ -255,27 +255,52 @@ export function geojsonLines(gj) {
   return { lnglat: new Float32Array(lng), starts: new Uint32Array(starts) };
 }
 
-// Graticule polylines (meridians + parallels) as { lnglat, starts }, ready for
-// lines(). Pure geometry, no data. Parallels are SMALL circles, but lines()
-// densifies each segment along a great circle — so sample them finely (2°):
-// the great-circle chord of a 2° parallel segment deviates from the parallel by
-// < 1e-4 rad, sub-pixel at any zoom. Meridians ARE great circles, so any
-// sampling works; 2° keeps them uniform. Meridians span ±latLimit so they don't
-// pile up at the poles (d3-geo's graticule trims the same way); parallels close
-// on themselves (first point repeated at lng +180).
+// One closed small circle — every point at angular `radius` (degrees) from
+// `center` [lng, lat] — as { xyz, starts } for lines(). Coordinate-free:
+// p(t) = cosθ·n + sinθ·(u·cos t + v·sin t) on an orthonormal frame around the
+// center axis — no lng/lat parameterization, so no antimeridian/pole seam.
+// A small circle is NOT a geodesic, and lines() draws geodesic chords between
+// anchors, so fidelity comes from the sampling step: Δt = MAX_SEG/√sinθ keeps
+// the chords' deviation from the circle within MAX_SEG²/8 — the geodesic
+// densifier's own chord budget. One fidelity constant owns every curve, and at
+// θ = 90° (a great circle) this converges to the geodesic policy exactly.
+export function smallCircleLines({ center, radius }) {
+  const th = radius * Math.PI / 180;
+  const n = lnglatToVec3(center[0], center[1]);
+  let u = vec3.cross(n, [0, 0, 1]);
+  if (vec3.len(u) < 1e-6) u = [1, 0, 0];        // polar axis: start on the equator plane
+  u = vec3.norm(u);
+  const v = vec3.cross(n, u);
+  const ct = Math.cos(th), st = Math.sin(th);
+  const segs = Math.max(8, Math.ceil((2 * Math.PI) * Math.sqrt(Math.max(st, 0)) / MAX_SEG));
+  const xyz = new Float32Array((segs + 1) * 3);
+  for (let i = 0; i < segs; i++) {
+    const t = (i / segs) * 2 * Math.PI, c = Math.cos(t), s = Math.sin(t);
+    for (let k = 0; k < 3; k++) xyz[i * 3 + k] = ct * n[k] + st * (c * u[k] + s * v[k]);
+  }
+  xyz.copyWithin(segs * 3, 0, 3);               // close the ring bitwise
+  return { xyz, starts: new Uint32Array([0, segs + 1]) };
+}
+
+// Graticule polylines (meridians + parallels) as { xyz, starts }, ready for
+// lines(). Pure geometry, no data. Meridians are geodesics, so each is just
+// its two endpoints — lines() densifies them like any segment; parallels are
+// small circles from smallCircleLines (its header explains the fidelity).
+// Meridians span ±latLimit so they don't pile up at the poles (d3-geo's
+// graticule trims the same way); parallels sit at symmetric multiples of step,
+// so the equator is always included.
 export function graticuleLines({ step = 10, latLimit = 80 } = {}) {
-  const pos = [], starts = [0];
-  const FINE = 2;                                        // deg between samples
-  for (let lng = -180; lng < 180; lng += step) {         // meridians
-    for (let lat = -latLimit; lat <= latLimit; lat += FINE) pos.push(lng, lat);
-    starts.push(pos.length / 2);
+  const xyz = [], starts = [0];
+  for (let lng = -180; lng < 180; lng += step) {         // meridians (geodesic)
+    xyz.push(...lnglatToVec3(lng, -latLimit), ...lnglatToVec3(lng, latLimit));
+    starts.push(xyz.length / 3);
   }
-  const latMax = Math.floor(latLimit / step) * step;     // parallels at multiples of
-  for (let lat = -latMax; lat <= latMax; lat += step) {  // step, symmetric about 0
-    for (let lng = -180; lng <= 180; lng += FINE) pos.push(lng, lat);
-    starts.push(pos.length / 2);
+  const latMax = Math.floor(latLimit / step) * step;
+  for (let lat = -latMax; lat <= latMax; lat += step) {  // parallels (small circles)
+    xyz.push(...smallCircleLines({ center: [0, 90], radius: 90 - lat }).xyz);
+    starts.push(xyz.length / 3);
   }
-  return { lnglat: new Float32Array(pos), starts: new Uint32Array(starts) };
+  return { xyz: new Float32Array(xyz), starts: new Uint32Array(starts) };
 }
 
 // d3-geo's geoStitch, loaded lazily from a CDN the first time borders() needs it
