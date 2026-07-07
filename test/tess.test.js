@@ -105,7 +105,7 @@ test('winding is meaningful: a CW ring fills the complement of the CCW one', () 
   const ccw = [[[0, 0], [10, 0], [10, 10], [0, 10]]];
   const cw = [ccw[0].slice().reverse()];
   runPoly(ccw, 'small CCW square');                // ~small region
-  runPoly(cw, 'CW square = complement');           // ~4π − small (Steiner fan)
+  runPoly(cw, 'CW square = complement');           // ~4π − small (cap-ring split)
 });
 
 test('concave CW loops fill the complement correctly (no star-shape assumption)', () => {

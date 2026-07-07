@@ -644,7 +644,7 @@ export class Orb {
       for (let r = polys[p]; r < polys[p + 1]; r++) rings.push([starts[r], starts[r + 1]]);
       if (!rings.length) continue;                    // empty ring group: nothing to fill
       for (let v = rings[0][0]; v < rings[rings.length - 1][1]; v++) F[v] = p;
-      const tris = triangulatePolygon(P, rings);      // may append Steiner vertices
+      const tris = triangulatePolygon(P, rings);      // may append new vertices
       while (F.length < P.length / 3) F.push(p);
       for (let t = 0; t < tris.length; t += 3) subdivideTri(P, F, I, p, tris[t], tris[t + 1], tris[t + 2]);
     }

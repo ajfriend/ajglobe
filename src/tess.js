@@ -487,7 +487,7 @@ function ringCCW(P, ring, center) {
 }
 
 // Triangulate one spherical polygon. P: flat unit-xyz PLAIN ARRAY — the
-// complement paths append Steiner vertices, so callers must own any parallel
+// complement paths append new vertices, so callers must own any parallel
 // arrays; rings: array of [start, end) vertex-index ranges (outer first, then
 // holes; open rings — no repeated closing point). Appends vertex-index triples
 // to `out` and returns it.
