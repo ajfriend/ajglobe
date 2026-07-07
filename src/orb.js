@@ -292,7 +292,10 @@ export function smallCircleLines({ center, radius }) {
   const q = quat.fromUnitVectors([0, 0, 1], lnglatToVec3(center[0], center[1]));
   const xyz = [], starts = [0];
   for (const deg of Array.isArray(radius) ? radius : [radius]) {
-    const th = deg * Math.PI / 180, ct = Math.cos(th), st = Math.sin(th);
+    // clamp to the sphere's valid range: outside it, sin(θ) < 0 poisons the
+    // segment count with NaN and the returned buffer with undefined slots
+    const th = Math.min(180, Math.max(0, deg)) * Math.PI / 180;
+    const ct = Math.cos(th), st = Math.sin(th);
     const segs = Math.max(8, Math.ceil((2 * Math.PI) * Math.sqrt(st) / MAX_SEG));
     const ring0 = xyz.length;
     for (let i = 0; i < segs; i++) {
@@ -397,7 +400,7 @@ export function subdivideTri(P, F, I, fid, ia, ib, ic) {
   const dot = (i, j) => P[i * 3] * P[j * 3] + P[i * 3 + 1] * P[j * 3 + 1] + P[i * 3 + 2] * P[j * 3 + 2];
   const mid = (i, j) => {                         // spherical midpoint of two unit vectors
     const x = P[i * 3] + P[j * 3], y = P[i * 3 + 1] + P[j * 3 + 1], z = P[i * 3 + 2] + P[j * 3 + 2];
-    const s = 1 / Math.hypot(x, y, z);
+    const s = 1 / (Math.hypot(x, y, z) || 1);     // ||1: exact antipodes would NaN the buffer
     P.push(x * s, y * s, z * s); F.push(fid);
     return P.length / 3 - 1;
   };
@@ -448,7 +451,10 @@ export class Orb {
       this[name + 'U'] = Object.fromEntries(keys.map((k) => [k, gl.getUniformLocation(prog, 'u_' + k)]));
     }
     this.dpr = 1;
-    this._hoverId = -1;        // feature to highlight in the fills (-1 = none)
+    this._hoverId = -1;        // feature to highlight (-1 = none)
+    this._hoverLayer = null;   // layer the highlight is scoped to (null = all)
+    this._frameId = 0;         // frame counter (gates pick-buffer rebuilds)
+    this._pickFrame = -1;      // frame the pick buffer was last rebuilt in
     this._pick = null;         // offscreen id-buffer { fbo, tex, rbo, w, h }
     this._pickValid = false;   // stale when the view / layers / size change
     this._pickPixel = new Uint8Array(4);   // reused readback scratch (per-pointer)
@@ -717,6 +723,7 @@ export class Orb {
     for (let p = 0; p < nCells; p++) {
       const rings = [];
       for (let r = polys[p]; r < polys[p + 1]; r++) rings.push([starts[r], starts[r + 1]]);
+      if (!rings.length) continue;                    // empty ring group: nothing to fill
       for (let v = rings[0][0]; v < rings[rings.length - 1][1]; v++) F[v] = p;
       const tris = triangulatePolygon(P, rings);      // may append Steiner vertices
       while (F.length < P.length / 3) F.push(p);
@@ -939,6 +946,7 @@ export class Orb {
     const pts = [], ptColor = [], ptSize = [];
 
     const strokePath = (coords, closed, color, width, opacity, dash) => {
+      if (coords.length < 2) return;              // degenerate path: nothing to stroke
       if (!color || color === 'none' || opacity <= 0 || width <= 0) return;
       const key = `${color}|${width}|${opacity}|${dash}`;
       let g = strokeGroups.get(key);
@@ -959,17 +967,22 @@ export class Orb {
         // even a zero-alpha fill would occlude filled features drawn after it
         const filled = fill !== 'none' && (p.fillOpacity ?? D.fillOpacity) > 0;
         for (const rings of (g.type === 'Polygon' ? [g.coordinates] : g.coordinates)) {
+          let ringCount = 0;
           for (const ring of rings) {
             const open = ring.length > 1 && ring[0][0] === ring[ring.length - 1][0]
               && ring[0][1] === ring[ring.length - 1][1] ? ring.slice(0, -1) : ring;
+            if (open.length < 2) continue;          // degenerate ring: nothing to draw
             if (filled) {
               for (const c of open) pos.push(c[0], c[1]);
               starts.push(pos.length / 2);
+              ringCount++;
             }
             strokePath(open, true, stroke, p.strokeWidth ?? D.strokeWidth,
               p.strokeOpacity ?? D.strokeOpacity, p.strokeDasharray ?? D.strokeDasharray);
           }
-          if (filled) {
+          // real-world exports contain empty polygons ([] or [[]]) — a polys
+          // entry with zero rings would crash the tessellation downstream
+          if (filled && ringCount > 0) {
             polys.push(starts.length - 1);
             polyFill.push(rgba(fill, p.fillOpacity ?? D.fillOpacity));
           }
@@ -980,9 +993,11 @@ export class Orb {
             p.strokeOpacity ?? D.lineOpacity, p.strokeDasharray ?? D.strokeDasharray);
         }
       } else if (g.type === 'Point' || g.type === 'MultiPoint') {
+        const fill = p.fill ?? D.fill;
+        if (fill === 'none') continue;            // hexRGBA('none') would NaN → black dot
         for (const c of (g.type === 'Point' ? [g.coordinates] : g.coordinates)) {
           pts.push(c[0], c[1]);
-          ptColor.push(rgba(p.fill ?? D.fill, 1));
+          ptColor.push(rgba(fill, 1));
           ptSize.push(p.r ?? D.r);
         }
       }
@@ -1033,6 +1048,10 @@ export class Orb {
       try { gj = applyStitch(typeof stitch === 'function' ? stitch : await loadStitch(), gj); }
       catch (e) { console.warn('ajglobe: geoStitch unavailable, drawing raw polygons —', e.message); }
     }
+    // destroy() may have run while we awaited the network: creating the layer
+    // now would allocate GL buffers nothing will ever free (the render loop is
+    // dead, so nobody calls remove()). SPA mount/unmount hits this constantly.
+    if (this._destroyed) return null;
     const { lnglat, starts } = geojsonLines(gj);
     return this.lines({ lnglat, starts, color, width });
   }
@@ -1067,8 +1086,11 @@ export class Orb {
     const g = this.cam.unproject(e.offsetX, e.offsetY);
     let pk, picked = false;                 // pick lazily — only if a handler reads index/layer
     const pick = () => {
-      if (!picked) { pk = g ? this.pick(e.offsetX, e.offsetY) : null; picked = true; }
-      return pk;                            // null when off-globe (nothing under the pixel)
+      // NOT gated on g: point discs and strokes are screen-space quads that
+      // legitimately overhang the globe silhouette, and the id-buffer holds
+      // their ids there even though the pixel misses the sphere
+      if (!picked) { pk = this.pick(e.offsetX, e.offsetY); picked = true; }
+      return pk;                            // null over no feature
     };
     this._emit(type, {
       x: e.offsetX, y: e.offsetY,
@@ -1096,6 +1118,7 @@ export class Orb {
   }
 
   _frame() {
+    this._frameId++;                          // pick-rebuild budget: once per frame
     if (!this._dirty) return;
     this._dirty = false;
     const gl = this.gl;
@@ -1123,9 +1146,10 @@ export class Orb {
     gl.useProgram(this.fillProg);
     gl.uniformMatrix4fv(this.fillU.mvp, false, mvp);
     gl.uniform1i(this.fillU.style, 0);
-    gl.uniform1i(this.fillU.hoverId, this._hoverId);
     gl.activeTexture(gl.TEXTURE0);
     for (const l of this.layers) {
+      gl.uniform1i(this.fillU.hoverId,
+        this._hoverLayer == null || this._hoverLayer === l ? this._hoverId : -1);
       gl.bindTexture(gl.TEXTURE_2D, l.styleTex);
       gl.uniform1i(this.fillU.styleW, l.styleW);
       gl.bindVertexArray(l.vao);
@@ -1161,10 +1185,11 @@ export class Orb {
       gl.uniform2f(this.pointU.viewport, w, h);
       gl.uniform1f(this.pointU.dppx, dppx);
       gl.uniform1i(this.pointU.style, 0);
-      gl.uniform1i(this.pointU.hoverId, this._hoverId);
       gl.activeTexture(gl.TEXTURE0);
       gl.depthMask(false);
       for (const l of this.pointLayers) {
+        gl.uniform1i(this.pointU.hoverId,
+          this._hoverLayer == null || this._hoverLayer === l ? this._hoverId : -1);
         gl.bindTexture(gl.TEXTURE_2D, l.styleTex);
         gl.uniform1i(this.pointU.styleW, l.styleW);
         gl.bindVertexArray(l.vao);
@@ -1197,11 +1222,15 @@ export class Orb {
     gl.deleteFramebuffer(t.fbo); gl.deleteTexture(t.tex); gl.deleteRenderbuffer(t.rbo);
   }
 
-  // Highlight one fill feature (tinted toward white), or -1 for none.
-  highlight(index) {
+  // Highlight one feature (tinted toward white), or -1/null for none. Pass the
+  // layer (e.g. from a hover event's e.layer) to scope the tint — feature ids
+  // are per-layer, so without it every layer's feature `index` would light up.
+  // Omitting the layer keeps the old tint-everywhere behavior for one-layer apps.
+  highlight(index, layer = null) {
     const id = index == null ? -1 : index;
-    if (id === this._hoverId) return;
+    if (id === this._hoverId && layer === this._hoverLayer) return;
     this._hoverId = id;
+    this._hoverLayer = layer;
     this._dirty = true;
   }
 
@@ -1257,13 +1286,23 @@ export class Orb {
     this._pickValid = true;
   }
 
-  // Which fill feature is under a canvas pixel? -> { layer, index } or null. Renders
-  // the id-buffer once per view change, then reads back a single pixel.
+  // Which fill feature is under a canvas pixel? -> { layer, index } or null.
+  // The id-buffer re-renders lazily, at most once per animation frame: during
+  // a drag every pointermove invalidates it (viewchange), and without the
+  // frame gate an index-reading hover handler would force a full offscreen
+  // re-render of every layer PER POINTER EVENT at DGGS scale. Reusing a
+  // ≤1-frame-stale buffer for extra same-frame picks is imperceptible.
   pick(px, py) {
     if (!this.layers.length && !this.pointLayers.length) return null;
-    if (!this._pickValid) this._renderPickScene();
+    if (!this._pickValid && this._pickFrame !== this._frameId) {
+      this._renderPickScene();
+      this._pickFrame = this._frameId;
+    }
+    if (!this._pick) return null;              // nothing ever rendered yet
     const gl = this.gl;
-    const x = Math.round(px * this.dpr), y = Math.round(this.canvas.height - py * this.dpr);
+    // -1: GL rows run bottom-up, so CSS row 0 is device row height-1 (without
+    // it, the top row failed the bounds check and every pick read one row off)
+    const x = Math.round(px * this.dpr), y = this.canvas.height - 1 - Math.round(py * this.dpr);
     if (x < 0 || y < 0 || x >= this.canvas.width || y >= this.canvas.height) return null;
     const p = this._pickPixel;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this._pick.fbo);
