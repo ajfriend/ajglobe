@@ -96,6 +96,88 @@ export function subdivideTri(P, F, I, fid, ia, ib, ic) {
   rec(ia, ib, ic);
 }
 
+// Fan-fill geometry for convex one-ring cells (the DGGS hot path): positions in,
+// {pos, fids, idx} out, ready for GPU upload. Triangulation is by ring TOPOLOGY —
+// a fan (s, j, j+1), indices only — so it is coordinate-free and immune to the
+// antimeridian/pole. Cells coarse enough that flat fan triangles would render
+// visibly wrong (straight-chord boundaries; coverage stopping short of the limb
+// for straddling cells) take the subdivideTri path instead; the apex-spoke gate
+// cos(MAX_FILL_EDGE/2) derives from subdivideTri's split threshold so one
+// constant owns the policy. Dispatch is PER CELL: a fine cell's edges are all
+// under the split threshold, so subdivideTri would emit its fan unchanged —
+// routing only the coarse cells produces identical geometry without dragging
+// millions of fine verts through array conversion and recursion when a few
+// giant cells share the layer (compacted mixed-resolution sets). r5/r6 cells
+// (~1°) never trip the gate, so pure-fine layers stay allocation-lean: one
+// typed index buffer, positions passed through untouched.
+export const COS_SPOKE_GATE = Math.cos(MAX_FILL_EDGE / 2);
+export function fanFillGeometry(pos, starts, nCells) {
+  const nVerts = pos.length / 3;
+
+  // Per-vertex feature id (the cell each vertex belongs to; style lives in a
+  // per-feature texture sampled by id). The same pass records which cells trip
+  // the coarseness gate.
+  const fids = new Uint32Array(nVerts);
+  let triCount = 0;
+  const coarse = [];
+  for (let c = 0; c < nCells; c++) {
+    const s = starts[c], e = starts[c + 1], k = e - s;
+    const ax = pos[s * 3], ay = pos[s * 3 + 1], az = pos[s * 3 + 2];
+    let large = false;
+    for (let v = s; v < e; v++) {
+      fids[v] = c;
+      if (ax * pos[v * 3] + ay * pos[v * 3 + 1] + az * pos[v * 3 + 2] < COS_SPOKE_GATE) large = true;
+    }
+    if (large) coarse.push(c);
+    else if (k >= 3) triCount += k - 2;
+  }
+
+  // Fine cells: fans straight into a typed buffer. `coarse` is ascending, so a
+  // single pointer skips them without a per-cell Set probe.
+  const fineIdx = new Uint32Array(triCount * 3);
+  let t = 0, ci = 0;
+  for (let c = 0; c < nCells; c++) {
+    if (ci < coarse.length && coarse[ci] === c) { ci++; continue; }
+    const s = starts[c], e = starts[c + 1];
+    for (let j = s + 1; j < e - 1; j++) { fineIdx[t++] = s; fineIdx[t++] = j; fineIdx[t++] = j + 1; }
+  }
+  if (!coarse.length) return { pos, fids, idx: fineIdx };
+
+  // Coarse cells: copy their verts into a small local scratch (subdivideTri
+  // needs plain-array push), subdivide, then splice the output back — local
+  // originals remap through globalOf, subdivision verts append after nVerts.
+  const P = [], F = [], I = [], globalOf = [];
+  for (const c of coarse) {
+    for (let v = starts[c]; v < starts[c + 1]; v++) {
+      globalOf.push(v);
+      P.push(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]);
+      F.push(c);
+    }
+  }
+  const nLocal = globalOf.length;
+  let off = 0;
+  for (const c of coarse) {
+    const k = starts[c + 1] - starts[c];
+    for (let j = 1; j < k - 1; j++) subdivideTri(P, F, I, c, off, off + j, off + j + 1);
+    off += k;
+  }
+
+  const nNew = P.length / 3 - nLocal;
+  const allPos = new Float32Array((nVerts + nNew) * 3);
+  allPos.set(pos);
+  for (let i = 0; i < nNew * 3; i++) allPos[nVerts * 3 + i] = P[nLocal * 3 + i];
+  const allFids = new Uint32Array(nVerts + nNew);
+  allFids.set(fids);
+  for (let i = 0; i < nNew; i++) allFids[nVerts + i] = F[nLocal + i];
+  const idx = new Uint32Array(fineIdx.length + I.length);
+  idx.set(fineIdx);
+  for (let i = 0; i < I.length; i++) {
+    const li = I[i];
+    idx[fineIdx.length + i] = li < nLocal ? globalOf[li] : nVerts + (li - nLocal);
+  }
+  return { pos: allPos, fids: allFids, idx };
+}
+
 // ---- shared ear-clip skeleton ----------------------------------------------
 // orient(a,b,c): >0 for a CCW corner; inTri(p,a,b,c): p inside CCW triangle;
 // samePos(i,j): vertices i and j are position-identical. Clips a simple CCW

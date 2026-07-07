@@ -3,7 +3,7 @@
 // in both adjacent triangles, or hairline slivers open along them (§8).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { subdivideTri } from '../src/tess.js';
+import { subdivideTri, fanFillGeometry } from '../src/tess.js';
 import { lnglatToVec3, vec3 } from '../src/glmath.js';
 
 // Run subdivideTri over a list of triangles given as lng/lat corner triples;
@@ -89,4 +89,63 @@ test('shared edges subdivide identically in both neighbours (no T-junctions)', (
   const ptsB = edgePoints(P, triB, u, v);
   assert.ok(ptsA.size >= 3, `expected the shared edge split (got ${ptsA.size} points)`);
   assert.deepEqual([...ptsA].sort(), [...ptsB].sort());
+});
+
+test('fanFillGeometry: per-cell dispatch matches all-cells subdivision exactly', () => {
+  // A mixed-resolution layer: one giant cell (trips the coarseness gate) among
+  // many fine quads. The hybrid path fans the fine cells directly and routes
+  // only the coarse cell through subdivideTri; since fine cells would emit
+  // unchanged from subdivideTri anyway (all edges under the split threshold),
+  // the position-resolved triangle sets must be IDENTICAL to the old
+  // everything-subdivides path.
+  const cells = [
+    [[-40, -30], [40, -30], [40, 30], [-40, 30]],            // giant: coarse
+  ];
+  for (let i = 0; i < 20; i++) {                             // fine 1° quads
+    const lng = -50 + i * 5, lat = 50;
+    cells.push([[lng, lat], [lng + 1, lat], [lng + 1, lat + 1], [lng, lat + 1]]);
+  }
+  const pos = [], starts = [0];
+  for (const ring of cells) {
+    for (const [lng, lat] of ring) pos.push(...lnglatToVec3(lng, lat));
+    starts.push(starts[starts.length - 1] + ring.length);
+  }
+  const posF = new Float32Array(pos);
+  const g = fanFillGeometry(posF, new Uint32Array(starts), cells.length);
+
+  // reference: the pre-optimization path — every cell through subdivideTri
+  const P = Array.from(posF), F = new Array(posF.length / 3).fill(0), I = [];
+  for (let c = 0; c < cells.length; c++) {
+    for (let v = starts[c]; v < starts[c + 1]; v++) F[v] = c;
+    for (let j = starts[c] + 1; j < starts[c + 1] - 1; j++) {
+      subdivideTri(P, F, I, c, starts[c], j, j + 1);
+    }
+  }
+
+  const key = (pos_, fids_, a, b, c) => {
+    const p = (i) => `${pos_[i * 3].toFixed(6)},${pos_[i * 3 + 1].toFixed(6)},${pos_[i * 3 + 2].toFixed(6)}`;
+    return `${fids_[a]}|` + [p(a), p(b), p(c)].sort().join(';');
+  };
+  const setOf = (pos_, fids_, idx_) => {
+    const s = [];
+    for (let t = 0; t < idx_.length; t += 3) s.push(key(pos_, fids_, idx_[t], idx_[t + 1], idx_[t + 2]));
+    return s.sort();
+  };
+  assert.equal(g.idx.length, I.length, 'same triangle count');
+  // the old path uploaded new Float32Array(P) — compare at the same precision
+  assert.deepEqual(setOf(g.pos, g.fids, g.idx), setOf(new Float32Array(P), F, I));
+});
+
+test('fanFillGeometry: pure-fine layer passes positions through untouched', () => {
+  const pos = [], starts = [0];
+  for (let i = 0; i < 8; i++) {
+    const lng = i * 10;
+    for (const [dx, dy] of [[0, 0], [1, 0], [1, 1], [0, 1]]) pos.push(...lnglatToVec3(lng + dx, dy));
+    starts.push(starts[starts.length - 1] + 4);
+  }
+  const posF = new Float32Array(pos);
+  const g = fanFillGeometry(posF, new Uint32Array(starts), 8);
+  assert.equal(g.pos, posF, 'no copy on the hot path');
+  assert.equal(g.idx.length, 8 * 2 * 3, 'two fan triangles per quad');
+  assert.equal(g.fids[4], 1);
 });

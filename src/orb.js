@@ -13,7 +13,7 @@
 // primitives — polygons (fills), lines (thick AA strokes), points (disc markers).
 
 import { lnglatToVec3, lnglatToVec3Into, vec3, quat, DEG } from './glmath.js';
-import { triangulatePolygon, subdivideTri, MAX_FILL_EDGE } from './tess.js';
+import { triangulatePolygon, subdivideTri, fanFillGeometry, COS_SPOKE_GATE } from './tess.js';
 import { Camera } from './camera.js';
 
 // Re-export the pure geo helpers so consumers get them from the package entry
@@ -373,14 +373,6 @@ function unitDisk(r, segments = 128) {
   return { pos: new Float32Array(pos), idx: new Uint32Array(idx) };
 }
 
-// polygons()'s fast-path gate, derived from tess.js's MAX_FILL_EDGE: fan-
-// triangle edges are two apex spokes plus a ring edge bounded by their sum, so
-// spokes under MAX_FILL_EDGE/2 keep every edge below the split threshold — the
-// flat fast path then emits exactly what subdivideTri would. The same value
-// doubles as the depth-disk radius (_buildDisk): it is the worst-case radius of
-// a subdivided fill boundary's chord, so the disk rim tucks behind every fill rim.
-const COS_SPOKE_GATE = Math.cos(MAX_FILL_EDGE / 2);
-
 export class Orb {
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
@@ -626,54 +618,12 @@ export class Orb {
 
     if (polys) return this._polygonsTess({ pos, starts, polys, nCells, fill });
 
-    // Per-vertex feature id (the cell each vertex belongs to). Style is NOT baked
-    // here — it lives in a per-feature texture sampled by id (built below), so a
-    // restyle rewrites nFeatures texels and never touches this geometry. All verts
-    // of a cell's fan share its id, so the fragment shader reads it 'flat'.
-    //
-    // The same pass flags any cell coarse enough that flat fan triangles would
-    // render visibly wrong — straight-chord boundaries, and coverage stopping
-    // short of the limb for straddling cells (see subdivideTri). The apex-spoke
-    // gate is derived from subdivideTri's split threshold (see COS_SPOKE_GATE)
-    // so one constant owns the policy; r5/r6 cells (~1°) never trip it, so
-    // their fast path stays as-is.
-    let fids = new Uint32Array(nVerts);
-    let triCount = 0, anyLarge = false;
-    for (let c = 0; c < nCells; c++) {
-      const s = starts[c], e = starts[c + 1], k = e - s;
-      const ax = pos[s * 3], ay = pos[s * 3 + 1], az = pos[s * 3 + 2];
-      for (let v = s; v < e; v++) {
-        fids[v] = c;
-        if (ax * pos[v * 3] + ay * pos[v * 3 + 1] + az * pos[v * 3 + 2] < COS_SPOKE_GATE) anyLarge = true;
-      }
-      if (k >= 3) triCount += k - 2;
-    }
-
-    // Triangulate by ring TOPOLOGY — a fan (s, j, j+1), indices only, so it is
-    // coordinate-free and immune to the antimeridian/pole (valid for convex rings).
-    let idx;
-    if (!anyLarge) {
-      idx = new Uint32Array(triCount * 3);
-      let t = 0;
-      for (let c = 0; c < nCells; c++) {
-        const s = starts[c], e = starts[c + 1];
-        for (let j = s + 1; j < e - 1; j++) { idx[t++] = s; idx[t++] = j; idx[t++] = j + 1; }
-      }
-    } else {
-      // Coarse cells present: subdivide their fan triangles and project the new
-      // vertices onto the sphere (curved boundaries + limb coverage). Small
-      // triangles still emit as one flat triangle, so only coarse cells grow.
-      const P = Array.from(pos), F = Array.from(fids), I = [];
-      for (let c = 0; c < nCells; c++) {
-        const s = starts[c], e = starts[c + 1];
-        for (let j = s + 1; j < e - 1; j++) subdivideTri(P, F, I, c, s, j, j + 1);
-      }
-      pos = new Float32Array(P);
-      fids = new Uint32Array(F);
-      idx = new Uint32Array(I);
-    }
-
-    return this._fillLayer(pos, fids, idx, nCells, fill);
+    // Fan triangulation + per-cell coarseness dispatch live in tess.js (pure,
+    // unit-tested there). Style is NOT baked into the geometry — it lives in a
+    // per-feature texture sampled by id, so a restyle rewrites nFeatures texels
+    // and never touches these buffers.
+    const g = fanFillGeometry(pos, starts, nCells);
+    return this._fillLayer(g.pos, g.fids, g.idx, nCells, fill);
   }
 
   // Ring-grouped (concave/holed) polygons: triangulate each group with
