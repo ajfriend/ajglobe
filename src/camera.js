@@ -21,6 +21,12 @@ const KEY_AXIS = {
 // globe's orientation lives entirely in the model quaternion. Compute it once.
 const VIEW = mat4.lookAt([0, 0, 3], [0, 0, 0], [0, 1, 0]);
 
+// Framing margin: at zoom 1 the ortho half-extent is MARGIN world units, so the
+// globe (radius 1) sits with 5% breathing room. Exported so nothing restates it:
+// orb derives px-per-radian from it (dashes), and framed embeds can set
+// zoom: MARGIN to make the globe exactly fill its box.
+export const MARGIN = 1.05;
+
 export class Camera {
   constructor(canvas, onChange, signal, interaction = {}) {
     this.canvas = canvas;
@@ -34,9 +40,13 @@ export class Camera {
     this._attach(signal, { drag: true, wheel: true, keys: true, ...interaction });
   }
 
-  // Orthographic half-height in world units: globe radius 1 + ~5% margin,
+  // Orthographic half-height in world units: globe radius 1 + the MARGIN,
   // divided by zoom. Shared by the arcball unproject (_ball) and the projection.
-  _halfExtent() { return 1.05 / this.zoom; }
+  _halfExtent() { return MARGIN / this.zoom; }
+
+  // Device px per world unit (≈ per radian of arc at the globe center) for a
+  // viewport of hPx device pixels — the scale screen-space effects (dashes) use.
+  pxPerRad(hPx) { return (hPx / 2) / this._halfExtent(); }
 
   // Project a pixel to a point on the virtual arcball (radius = globe radius),
   // in the camera/world frame (z toward the viewer).

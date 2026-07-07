@@ -21,7 +21,7 @@
   .globe canvas:active{cursor:grabbing;}
   .globe canvas:focus{outline:none;}
   /* the globe outline circle (Plot.sphere in the original): the orbs run at
-     zoom 1.05, so the globe exactly fills the box (like Plot's inset: 1) and
+     zoom MARGIN (the camera framing constant), so the globe exactly fills the box and
      the circle hugs the edge — valid because wheel-zoom is disabled */
   .globe .ring{position:absolute;inset:1px;border:2px solid #111;
     border-radius:50%;pointer-events:none;}
@@ -71,6 +71,8 @@ so it’s going to be tough to plot on a plane no matter what.</p>
 <script type="module">
 import { Orb, lnglatToQuat } from '../src/orb.js';
 import { lnglatToVec3, vec3, vec3ToLngLat } from '../src/glmath.js';
+import { capCenter } from '../src/tess.js';
+import { MARGIN } from '../src/camera.js';
 
 const load = (name) => fetch(`data/cells_to_poly/${name}.json`).then((r) => r.json());
 
@@ -81,8 +83,7 @@ function addArrow(xyz, starts, p, q) {
   const A = lnglatToVec3(p[0], p[1]), B = lnglatToVec3(q[0], q[1]);
   const a = vec3.slerp(A, B, 0.42), b = vec3.slerp(A, B, 0.58);   // like Plot's mid-edge marker
   xyz.push(...a, ...b); starts.push(xyz.length / 3);
-  const d = vec3.dot(a, b);
-  const back = vec3.norm([a[0] - d * b[0], a[1] - d * b[1], a[2] - d * b[2]]);  // tangent at tip toward shaft
+  const back = vec3.tangent(b, a);                      // tangent at tip toward shaft
   const hl = vec3.angle(a, b) * 0.9;                    // wing arc length
   const wing = (s) => {
     const phi = s * 28 * Math.PI / 180;
@@ -127,12 +128,12 @@ function lineArrows(gj) {                               // per-feature arrowStep
   return out;
 }
 
-// data centroid -> home view (vertex mean; falls back to the first vertex for
-// degenerate data like the equator loops, whose mean is ~the zero vector)
+// data center -> home view: bounding-cap center over all vertices (capCenter
+// handles even degenerate distributions like the equator loops, where a plain
+// vertex mean collapses to ~zero)
 function homeOf(gj) {
-  const m = [0, 0, 0];
-  let n = 0, first = null;
-  const add = (c) => { const v = lnglatToVec3(c[0], c[1]); first ??= c; m[0] += v[0]; m[1] += v[1]; m[2] += v[2]; n++; };
+  const P = [];
+  const add = (c) => P.push(...lnglatToVec3(c[0], c[1]));
   for (const f of gj.features) {
     const g = f.geometry, C = g.coordinates;
     if (g.type === 'Point') add(C);
@@ -140,8 +141,7 @@ function homeOf(gj) {
     else if (g.type === 'Polygon') C.forEach((r) => r.forEach(add));
     else if (g.type === 'MultiPolygon') C.forEach((p) => p.forEach((r) => r.forEach(add)));
   }
-  if (vec3.len(m) / n < 0.1) return { lng: first[0], lat: first[1] };
-  const ll = vec3ToLngLat(vec3.norm(m));
+  const ll = vec3ToLngLat(capCenter(P, [[0, P.length / 3]]).c);
   return { lng: ll.lng, lat: ll.lat };
 }
 
@@ -167,12 +167,13 @@ async function globe(id, name, { size, arrowStep = 0, sync = true }) {
   if (arrowStep) orb.lines({ ...polygonArrows(gj, arrowStep), color: '#8b0000', width: 1.5 });
   for (const la of lineArrows(gj)) orb.lines({ xyz: la.xyz, starts: la.starts, color: la.color, width: 2 });
 
-  // zoom 1.05 cancels the camera's 5% margin: the globe exactly fills the box,
+  // zoom MARGIN cancels the camera framing margin exactly: the globe fills the
+  // box,
   // matching the original's Plot inset: 1 framing
   const home = sync ? (syncHome ??= homeOf(gj)) : homeOf(gj);
   orb.lookAt(home.lng, home.lat);
-  orb.setView({ zoom: 1.05 });
-  canvas.addEventListener('dblclick', () => orb.setView({ q: lnglatToQuat(home.lng, home.lat, 0), zoom: 1.05 }));
+  orb.setView({ zoom: MARGIN });
+  canvas.addEventListener('dblclick', () => orb.setView({ q: lnglatToQuat(home.lng, home.lat, 0), zoom: MARGIN }));
 
   if (sync) {
     for (const other of syncOrbs) {                     // the idempotent setView

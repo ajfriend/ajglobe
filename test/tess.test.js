@@ -10,14 +10,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { triangulatePolygon, capCenter } from '../src/tess.js';
+import { triangulatePolygon, capCenter, HEMI_MARGIN } from '../src/tess.js';
 import { lnglatToVec3, vec3 } from '../src/glmath.js';
 
 const at = (P, i) => [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]];
-const tangent = (v, u) => {                       // tangent at v toward u
-  const d = vec3.dot(u, v);
-  return vec3.norm([u[0] - d * v[0], u[1] - d * v[1], u[2] - d * v[2]]);
-};
 const det3 = (A, B, C) => vec3.dot(A, vec3.cross(B, C));
 
 // Gauss-Bonnet: area enclosed on the LEFT of a geodesic ring = 2π − Σ exterior turns.
@@ -25,8 +21,9 @@ function ringArea(P, [s, e]) {
   let turns = 0;
   for (let i = s; i < e; i++) {
     const v = at(P, i), prev = at(P, i === s ? e - 1 : i - 1), next = at(P, i === e - 1 ? s : i + 1);
-    const din = vec3.norm(vec3.cross(vec3.cross(prev, v), v));   // arrive direction at v
-    const dout = tangent(v, next);
+    const t = vec3.tangent(v, prev);
+    const din = [-t[0], -t[1], -t[2]];                           // arrive direction at v
+    const dout = vec3.tangent(v, next);
     turns += Math.atan2(vec3.dot(vec3.cross(din, dout), v), vec3.dot(din, dout));
   }
   return 2 * Math.PI - turns;
@@ -36,7 +33,7 @@ function ringArea(P, [s, e]) {
 function triArea(P, a, b, c) {
   const A = at(P, a), B = at(P, b), C = at(P, c);
   const ang = (V, U, W) => {
-    const t1 = tangent(V, U), t2 = tangent(V, W);
+    const t1 = vec3.tangent(V, U), t2 = vec3.tangent(V, W);
     return Math.atan2(vec3.len(vec3.cross(t1, t2)), vec3.dot(t1, t2));
   };
   return ang(A, B, C) + ang(B, C, A) + ang(C, A, B) - Math.PI;
@@ -73,12 +70,8 @@ function runPoly(coords, label) {
 
   const n = rings[rings.length - 1][1] - rings[0][0];
   const complementSingle = rings.length === 1 && outerA > 2 * Math.PI;
-  const c = capCenter(P, rings);
-  let worstDot = 2;
-  for (const [s, e] of rings) {
-    for (let v = s; v < e; v++) worstDot = Math.min(worstDot, vec3.dot(c, at(P, v)));
-  }
-  const complementHoles = worstDot > 0.02 && rings.length > 1 && outerA > 2 * Math.PI;
+  const { worst } = capCenter(P, rings);
+  const complementHoles = worst > HEMI_MARGIN && rings.length > 1 && outerA > 2 * Math.PI;
   // complement-with-holes adds a synthetic split ring, so only bound the count
   if (complementHoles) assert.ok(tris.length / 3 > n, `${label}: triangle count`);
   else assert.equal(tris.length / 3, complementSingle ? n : n + 2 * (rings.length - 1) - 2,

@@ -13,7 +13,7 @@
 // primitives — polygons (fills), lines (thick AA strokes), points (disc markers).
 
 import { lnglatToVec3, lnglatToVec3Into, vec3, quat } from './glmath.js';
-import { triangulatePolygon } from './tess.js';
+import { triangulatePolygon, MAX_FILL_EDGE } from './tess.js';
 
 // Re-export the pure view converters so consumers get them from the package entry
 // alongside Orb (the core view format is { q, zoom }; these translate the rotation
@@ -375,7 +375,8 @@ function unitDisk(r, segments = 128) {
 // cell's surface would cross the disk plane short of the silhouette, leaving a
 // bare-disk annulus. At the threshold the residual sag is 1−cos(MAX_FILL_EDGE/2)
 // ≈ 0.001 — sub-2px at typical canvas sizes. Internal; exported for the tests.
-const MAX_FILL_EDGE = 0.09;                       // rad
+// (MAX_FILL_EDGE itself lives in tess.js — the split-circle sampling there
+// shares the same budget — and is imported above.)
 const COS_FILL_EDGE = Math.cos(MAX_FILL_EDGE);
 // polygons()'s fast-path gate, derived from the same constant: fan-triangle
 // edges are two apex spokes plus a ring edge bounded by their sum, so spokes
@@ -635,7 +636,7 @@ export class Orb {
   polygons({ xyz, lnglat, starts, polys, fill }) {
     const gl = this.gl;
     const nCells = polys ? polys.length - 1 : starts.length - 1;
-    let nVerts = xyz ? xyz.length / 3 : lnglat.length / 2;
+    const nVerts = xyz ? xyz.length / 3 : lnglat.length / 2;
 
     // positions -> unit-sphere xyz
     let pos;
@@ -695,7 +696,6 @@ export class Orb {
       pos = new Float32Array(P);
       fids = new Uint32Array(F);
       idx = new Uint32Array(I);
-      nVerts = pos.length / 3;
     }
 
     return this._fillLayer(pos, fids, idx, nCells, fill);
@@ -710,7 +710,7 @@ export class Orb {
       const rings = [];
       for (let r = polys[p]; r < polys[p + 1]; r++) rings.push([starts[r], starts[r + 1]]);
       for (let v = rings[0][0]; v < rings[rings.length - 1][1]; v++) F[v] = p;
-      const tris = triangulatePolygon(P, rings);      // may append a Steiner vertex
+      const tris = triangulatePolygon(P, rings);      // may append Steiner vertices
       while (F.length < P.length / 3) F.push(p);
       for (let t = 0; t < tris.length; t += 3) subdivideTri(P, F, I, p, tris[t], tris[t + 1], tris[t + 2]);
     }
@@ -766,32 +766,36 @@ export class Orb {
     const vec = (i) => this._posAt(xyz, lnglat, i);
 
     // Per segment, 4 verts carrying both endpoints (a_pA, a_pB) + (end, side) +
-    // the cumulative arc length at that end (for dashing); the vertex shader does
-    // the screen-space offset, so geometry is view-independent.
-    const PA = [], PB = [], PRM = [], LEN = [], IDX = [];
+    // when dashed, the cumulative arc length at that end. Sub-segment lengths
+    // come from the densification analytically (slerp is uniform in angle, so
+    // each of the n pieces is ang/n) — no per-piece trig. Undashed layers skip
+    // the length buffer entirely: with the attribute array disabled (the VAO
+    // default) the shader reads the constant 0, and u_dash = (0,0) never tests
+    // it — saves ~12% of vertex data on big layers like the 10m coastline.
+    const PA = [], PB = [], PRM = [], LEN = dash ? [] : null, IDX = [];
     let base = 0;
     for (let l = 0; l < nLines; l++) {
       const s = starts[l], e = starts[l + 1];
       if (e - s < 2) continue;
-      // densify the polyline by slerp so each drawn segment reads as a geodesic arc
-      let prev = vec(s);
-      const dense = [prev];
+      // densify the polyline by slerp so each drawn segment reads as a geodesic
+      // arc; dense[i] carries the cumulative arc length alongside each point
+      let prev = vec(s), arc = 0;
+      const dense = [[prev, 0]];
       for (let i = s + 1; i < e; i++) {
         const cur = vec(i);
-        const n = Math.max(1, Math.ceil(vec3.angle(prev, cur) / MAX_SEG));
-        for (let k = 1; k <= n; k++) dense.push(vec3.slerp(prev, cur, k / n));
+        const ang = vec3.angle(prev, cur);
+        const n = Math.max(1, Math.ceil(ang / MAX_SEG));
+        for (let k = 1; k <= n; k++) dense.push([vec3.slerp(prev, cur, k / n), arc + (ang * k) / n]);
         prev = cur;
+        arc += ang;
       }
-      let arc = 0;
       for (let i = 0; i + 1 < dense.length; i++) {
-        const a = dense[i], b = dense[i + 1];
-        const arcB = arc + vec3.angle(a, b);
+        const [a, arcA] = dense[i], [b, arcB] = dense[i + 1];
         for (let q = 0; q < 4; q++) { PA.push(a[0], a[1], a[2]); PB.push(b[0], b[1], b[2]); }
         PRM.push(0, -1, 0, 1, 1, -1, 1, 1);
-        LEN.push(arc, arc, arcB, arcB);
+        if (LEN) LEN.push(arcA, arcA, arcB, arcB);
         IDX.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
         base += 4;
-        arc = arcB;
       }
     }
 
@@ -800,13 +804,13 @@ export class Orb {
     const pa = this._attrib(this.strokeProg, 'a_pA', new Float32Array(PA), 3);
     const pb = this._attrib(this.strokeProg, 'a_pB', new Float32Array(PB), 3);
     const pm = this._attrib(this.strokeProg, 'a_param', new Float32Array(PRM), 2);
-    const pl = this._attrib(this.strokeProg, 'a_len', new Float32Array(LEN), 1);
+    const pl = LEN ? this._attrib(this.strokeProg, 'a_len', new Float32Array(LEN), 1) : null;
     const ib = this._elements(new Uint32Array(IDX));
     gl.bindVertexArray(null);
 
     const layer = {
       vao, count: IDX.length, nLines, width,
-      color: rgbaF(color), dash, _buffers: [pa, pb, pm, pl, ib],
+      color: rgbaF(color), dash, _buffers: [pa, pb, pm, ...(pl ? [pl] : []), ib],
     };
     layer.remove = () => {
       this.lineLayers = this.lineLayers.filter((x) => x !== layer);
@@ -911,7 +915,16 @@ export class Orb {
       const c = hexRGBA(color);
       return [c[0], c[1], c[2], Math.round(c[3] * opacity)];
     };
-    const dashOf = (v) => (v == null ? null : Array.isArray(v) ? v : String(v).trim().split(/[ ,]+/).map(Number));
+    // normalize any SVG dasharray to the core's [on, off] contract: odd-length
+    // lists repeat (SVG: '4' means 4 4); entries beyond the first pair are
+    // dropped (the shader draws a two-phase pattern only)
+    const dashOf = (v) => {
+      if (v == null) return null;
+      const a = (Array.isArray(v) ? v : String(v).trim().split(/[ ,]+/).map(Number)).filter(Number.isFinite);
+      if (!a.length) return null;
+      if (a.length === 1) a.push(a[0]);
+      return a.slice(0, 2);
+    };
 
     const pos = [], starts = [0], polys = [0], polyFill = [];
     const strokeGroups = new Map();
@@ -1117,9 +1130,7 @@ export class Orb {
       gl.useProgram(this.strokeProg);
       gl.uniformMatrix4fv(this.strokeU.mvp, false, mvp);
       gl.uniform2f(this.strokeU.viewport, w, h);
-      // device px per radian of arc at the globe center: globe pixel radius
-      // (ortho half-extent is 1.05/zoom world units over h/2 device px)
-      gl.uniform1f(this.strokeU.pxPerRad, (h / 2) * this.cam.zoom / 1.05);
+      gl.uniform1f(this.strokeU.pxPerRad, this.cam.pxPerRad(h));
       gl.depthMask(false);
       for (const l of this.lineLayers) {
         gl.uniform4f(this.strokeU.color, l.color[0], l.color[1], l.color[2], l.color[3]);

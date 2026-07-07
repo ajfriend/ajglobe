@@ -1,31 +1,47 @@
 // Triangulation of concave spherical polygons with holes (the convex topology
 // fan in polygons() can't express these). Pure geometry, no GL. Two paths:
 //
+// Winding is trusted throughout — the outer ring's orientation chooses the
+// region (CCW = its small side, CW = the complement) and is never repaired;
+// hole rings are re-oriented only to their role (see triangulatePolygon).
+// Two triangulation paths:
+//
 // 1. Polygon fits an open hemisphere (the common case): gnomonic-project the
 //    rings onto the tangent plane at the polygon's bounding-cap center.
 //    Gnomonic maps great circles to straight lines, so the 2D triangulation's
-//    topology is faithful on the sphere — and 2D signed areas let us normalize
-//    sloppy input winding. Bridge holes into the outer ring (Eberly's max-x
-//    mutual-visibility method), then ear-clip. The projection is per-polygon
-//    and local, so this does NOT reintroduce the global 2D parameterization
-//    the thesis bans: a tangent plane has no antimeridian and no pole.
+//    topology is faithful on the sphere — and 2D signed areas READ winding
+//    (routing, hole-role orientation). Bridge holes into the outer ring
+//    (Eberly's max-x mutual-visibility method), then ear-clip. The projection
+//    is per-polygon and local, so this does NOT reintroduce the global 2D
+//    parameterization the thesis bans: a tangent plane has no antimeridian
+//    and no pole.
 //
 // 2. Polygon exceeds a hemisphere (encloses a pole, spans the antimeridian at
 //    scale, contains antipodal points — no projection center exists): ear-clip
 //    ON THE SPHERE with triple-product predicates. Ear tests are local (an ear
 //    of a cell-scale boundary is a small spherical triangle, where
 //    det(a,b,c) > 0 ⇔ CCW and three half-space dets ⇔ point-in-triangle), so
-//    the polygon's total size doesn't matter. The one thing this path cannot
-//    do is normalize winding (there is no global signed area without already
-//    knowing the interior side), so it TRUSTS GeoJSON right-hand-rule input:
-//    outer rings CCW, holes CW. Holes are bridged at the nearest mutually
-//    visible vertex pair (visibility = the geodesic crosses no polygon edge).
+//    the polygon's total size doesn't matter. Unlike path 1 this path has no
+//    signed areas to re-orient holes with, so holes must arrive wound CW —
+//    the only remaining asymmetry between the paths.
 //
 // Both paths are O(n²), sized for annotation-scale polygons (hundreds of
 // verts), not DGGS layers; convex DGGS cells keep the fan fast path in
 // polygons().
 
 import { vec3, quat } from './glmath.js';
+
+// Max geodesic edge (radians) a fill triangle may keep un-split: subdivideTri
+// (orb.js) splits longer edges, and everything coupled to that budget derives
+// from this one constant — orb's COS_FILL_EDGE / COS_SPOKE_GATE / depth-disk
+// radius, and the split-circle sampling in complementWithHoles below.
+export const MAX_FILL_EDGE = 0.09;
+
+// Hemisphere-routing margin, in COSINE space (~1.1° from the horizon): below
+// this, gnomonic projection blows up and polygons route to the spherical
+// path. NOT related to MAX_SEG = 0.02 rad in orb.js — the numeric match is
+// coincidence; deriving one from the other would be wrong.
+export const HEMI_MARGIN = 0.02;   // exported for the unit tests
 
 // ---- shared ear-clip skeleton ----------------------------------------------
 // orient(a,b,c): >0 for a CCW corner; inTri(p,a,b,c): p inside CCW triangle.
@@ -135,21 +151,24 @@ function bridgeHole2(pts, outer, hole) {
   return spliceBridge(outer, ci, hole, m);
 }
 
+// gnomonic-project one ring's vertices into pts (flat 2D), recording each 2D
+// slot's source index in src; returns the ring's slot cycle. The one home of
+// the rotate-and-divide projection — ringCCW and triangulateGnomonic share it.
+function projectRing(P, [s, e], q, pts, src) {
+  const cyc = [];
+  for (let v = s; v < e; v++) {
+    const r = quat.rotateVec3(q, [P[v * 3], P[v * 3 + 1], P[v * 3 + 2]]);
+    src.push(v);
+    cyc.push(src.length - 1);
+    pts.push(r[0] / r[2], r[1] / r[2]);
+  }
+  return cyc;
+}
+
 function triangulateGnomonic(P, rings, center, out) {
   const q = quat.fromUnitVectors(center, [0, 0, 1]);      // cap center -> +z
-
-  // gnomonic-project every ring vertex; remember the source index per 2D slot
-  const pts = [], slot = new Map();
-  const cycles = rings.map(([s, e]) => {
-    const cyc = [];
-    for (let v = s; v < e; v++) {
-      const r = quat.rotateVec3(q, [P[v * 3], P[v * 3 + 1], P[v * 3 + 2]]);
-      slot.set(pts.length / 2, v);
-      cyc.push(pts.length / 2);
-      pts.push(r[0] / r[2], r[1] / r[2]);
-    }
-    return cyc;
-  });
+  const pts = [], src = [];
+  const cycles = rings.map((ring) => projectRing(P, ring, q, pts, src));
 
   // The outer ring's winding is TRUSTED (routing in triangulatePolygon sends
   // only CCW-outer polygons here). Hole rings are oriented to their ROLE: per
@@ -163,7 +182,7 @@ function triangulateGnomonic(P, rings, center, out) {
 
   const tris = [];
   earClip((a, b, c) => cross2(pts, a, b, c), (p, a, b, c) => pointInTri2(pts, p, a, b, c), outer, tris);
-  for (const t of tris) out.push(slot.get(t));
+  for (const t of tris) out.push(src[t]);
   return out;
 }
 
@@ -194,7 +213,8 @@ function complementFan(P, [s, e], center, out) {
 function complementWithHoles(P, rings, center, worst, out) {
   const th = (Math.acos(worst) + Math.PI / 2) / 2;      // split-circle radius
   const q = quat.fromUnitVectors([0, 0, 1], center);
-  const segs = Math.max(16, Math.ceil((2 * Math.PI) * Math.sin(th) / 0.09));
+  // sample at the fill-edge budget so subdivideTri won't re-split ring edges
+  const segs = Math.max(16, Math.ceil((2 * Math.PI) * Math.sin(th) / MAX_FILL_EDGE));
   const ring0 = P.length / 3;
   const ct = Math.cos(th), st = Math.sin(th);
   for (let i = 0; i < segs; i++) {
@@ -285,20 +305,27 @@ function triangulateSpherical(P, rings, out) {
 // from the vertex mean toward the farthest vertex with shrinking steps). The
 // vertex mean alone is density-biased and can drift enough to push vertices of
 // a near-hemisphere polygon past 90°; the cap center maximizes the margin.
-export function capCenter(P, rings) {   // exported for the unit tests
+// Returns { c, worst }: c the cap center, worst the min dot(c, vertex) — the
+// cosine of the cap's angular radius. Exported for the unit tests (which use
+// worst > HEMI_MARGIN to predict routing).
+export function capCenter(P, rings) {
   let c = [0, 0, 0];
   for (const [s, e] of rings) {
     for (let v = s; v < e; v++) { c[0] += P[v * 3]; c[1] += P[v * 3 + 1]; c[2] += P[v * 3 + 2]; }
   }
   c = vec3.norm(c);
+  let worst = -2, prev = -2;
   for (let k = 1; k <= 60; k++) {
-    let f = 0, worst = 2;
+    let f = 0;
+    worst = 2;
     for (const [s, e] of rings) {
       for (let v = s; v < e; v++) {
         const d = c[0] * P[v * 3] + c[1] * P[v * 3 + 1] + c[2] * P[v * 3 + 2];
         if (d < worst) { worst = d; f = v; }
       }
     }
+    if (Math.abs(worst - prev) < 1e-7) break;           // converged
+    prev = worst;
     const t = 1 / (k + 1);
     c = vec3.norm([
       c[0] + t * (P[f * 3] - c[0]),
@@ -306,19 +333,16 @@ export function capCenter(P, rings) {   // exported for the unit tests
       c[2] + t * (P[f * 3 + 2] - c[2]),
     ]);
   }
-  return c;
+  return { c, worst };
 }
 
 // signed-area sign of one ring in the gnomonic frame at `center`:
 // > 0 = CCW = the ring encloses its small side; < 0 = CW = the complement
-function ringCCW(P, [s, e], center) {
+function ringCCW(P, ring, center) {
   const q = quat.fromUnitVectors(center, [0, 0, 1]);
-  const pts = [];
-  for (let v = s; v < e; v++) {
-    const r = quat.rotateVec3(q, [P[v * 3], P[v * 3 + 1], P[v * 3 + 2]]);
-    pts.push(r[0] / r[2], r[1] / r[2]);
-  }
-  return area2(pts, Array.from({ length: e - s }, (_, i) => i)) > 0;
+  const pts = [], src = [];
+  const cyc = projectRing(P, ring, q, pts, src);
+  return area2(pts, cyc) > 0;
 }
 
 // Triangulate one spherical polygon. P: flat unit-xyz PLAIN ARRAY — the
@@ -334,15 +358,9 @@ function ringCCW(P, [s, e], center) {
 // sphere only lets you obey it"). Sloppily wound planar exports are the data
 // layer's problem, by design.
 export function triangulatePolygon(P, rings, out = []) {
-  const c = capCenter(P, rings);
-  let worst = 2;
-  for (const [s, e] of rings) {
-    for (let v = s; v < e; v++) {
-      worst = Math.min(worst, c[0] * P[v * 3] + c[1] * P[v * 3 + 1] + c[2] * P[v * 3 + 2]);
-    }
-  }
-  // vertices don't fit an open hemisphere (>~1.1° margin): spherical predicates
-  if (worst <= 0.02) return triangulateSpherical(P, rings, out);
+  const { c, worst } = capCenter(P, rings);
+  // vertices don't fit an open hemisphere (HEMI_MARGIN): spherical predicates
+  if (worst <= HEMI_MARGIN) return triangulateSpherical(P, rings, out);
   if (ringCCW(P, rings[0], c)) return triangulateGnomonic(P, rings, c, out);
   return rings.length === 1
     ? complementFan(P, rings[0], c, out)

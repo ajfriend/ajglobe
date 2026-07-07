@@ -16,6 +16,11 @@ export const vec3 = {
   },
   // Angle (radians) between two unit vectors.
   angle: (a, b) => Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))),
+  // Unit tangent at v pointing along the geodesic toward u (u's component ⊥ v).
+  tangent: (v, u) => {
+    const d = u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    return vec3.norm([u[0] - d * v[0], u[1] - d * v[1], u[2] - d * v[2]]);
+  },
   // Spherical lerp of two unit vectors — the great-circle midpoint family. Stays
   // on the sphere, so it densifies an edge into a geodesic arc (seam/pole-safe).
   slerp(a, b, t) {
