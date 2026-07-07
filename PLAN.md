@@ -163,7 +163,7 @@ orb.highlight(index);              // tint one fill feature (-1 = none)
 orb.on('hover'|'click'|'viewchange', cb);          // hover/click: {x,y,lng,lat,index,layer}
                                    // 'click' means a stationary click: drag-releases are swallowed (<=4px travel)
 await orb.snapshot({ width, height, supersample, transparent, type });  // -> PNG Blob
-orb.stats;                         // {cells, verts}
+orb.stats;                         // {features, verts}
 orb.destroy();                     // stop the loop, detach listeners, free all GPU resources
 ```
 Planned additions (per-feature stroke width; `points()` outline/size-update; labels).

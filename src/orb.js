@@ -617,7 +617,7 @@ export class Orb {
   // Returns the layer; layer.update({fill}) restyles (no re-tessellation),
   // layer.remove() frees it.
   polygons({ xyz, lnglat, starts, polys, fill }) {
-    const nCells = polys ? polys.length - 1 : starts.length - 1;
+    const nFeatures = polys ? polys.length - 1 : starts.length - 1;
     const nVerts = xyz ? xyz.length / 3 : lnglat.length / 2;
 
     // positions -> unit-sphere xyz
@@ -631,22 +631,22 @@ export class Orb {
       }
     }
 
-    if (polys) return this._polygonsTess({ pos, starts, polys, nCells, fill });
+    if (polys) return this._polygonsTess({ pos, starts, polys, nFeatures, fill });
 
     // Fan triangulation + per-cell coarseness dispatch live in tess.js (pure,
     // unit-tested there). Style is NOT baked into the geometry — it lives in a
     // per-feature texture sampled by id, so a restyle rewrites nFeatures texels
     // and never touches these buffers.
-    const g = fanFillGeometry(pos, starts, nCells);
-    return this._fillLayer(g.pos, g.fids, g.idx, nCells, fill);
+    const g = fanFillGeometry(pos, starts, nFeatures);
+    return this._fillLayer(g.pos, g.fids, g.idx, nFeatures, fill);
   }
 
   // Ring-grouped (concave/holed) polygons: triangulate each group with
   // src/tess.js, then push every triangle through subdivideTri like the fan
   // path (curved boundaries + limb coverage are the same need either way).
-  _polygonsTess({ pos, starts, polys, nCells, fill }) {
+  _polygonsTess({ pos, starts, polys, nFeatures, fill }) {
     const P = Array.from(pos), F = new Array(pos.length / 3).fill(0), I = [];
-    for (let p = 0; p < nCells; p++) {
+    for (let p = 0; p < nFeatures; p++) {
       const rings = [];
       for (let r = polys[p]; r < polys[p + 1]; r++) rings.push([starts[r], starts[r + 1]]);
       if (!rings.length) continue;                    // empty ring group: nothing to fill
@@ -655,15 +655,15 @@ export class Orb {
       while (F.length < P.length / 3) F.push(p);
       for (let t = 0; t < tris.length; t += 3) subdivideTri(P, F, I, p, tris[t], tris[t + 1], tris[t + 2]);
     }
-    return this._fillLayer(new Float32Array(P), new Uint32Array(F), new Uint32Array(I), nCells, fill);
+    return this._fillLayer(new Float32Array(P), new Uint32Array(F), new Uint32Array(I), nFeatures, fill);
   }
 
   // Shared tail of the fill paths: style texture, VAO, layer handle.
-  _fillLayer(pos, fids, idx, nCells, fill) {
+  _fillLayer(pos, fids, idx, nFeatures, fill) {
     const gl = this.gl;
     // Per-feature style: one RGBA8 texel per feature, indexed by id (restyle just
     // rewrites those texels; geometry is untouched).
-    const { tex: styleTex, W, H, restyle } = this._makeStyle(nCells, fill);
+    const { tex: styleTex, W, H, restyle } = this._makeStyle(nFeatures, fill);
 
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
@@ -673,7 +673,7 @@ export class Orb {
     gl.bindVertexArray(null);
 
     const layer = {
-      vao, count: idx.length, nCells, nVerts: pos.length / 3,
+      vao, count: idx.length, nFeatures, nVerts: pos.length / 3,
       styleTex, styleW: W, styleH: H, _buffers: [pb, fb, ib],
     };
     layer.update = ({ fill: f } = {}) => { if (f != null) restyle(f); return layer; };
@@ -1034,7 +1034,7 @@ export class Orb {
 
   get stats() {
     return {
-      cells: this.layers.reduce((a, l) => a + l.nCells, 0),
+      features: this.layers.reduce((a, l) => a + l.nFeatures, 0),
       verts: this.layers.reduce((a, l) => a + l.nVerts, 0),
     };
   }
@@ -1194,7 +1194,7 @@ export class Orb {
       gl.uniform1ui(this.pickU.idBase, base);
       gl.bindVertexArray(l.vao);
       gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
-      base += l.nCells;
+      base += l.nFeatures;
     }
     // point discs continue the same global id space (drawn after fills so they win
     // where they overlap); the back hemisphere is already occluded by the disk.
@@ -1245,8 +1245,8 @@ export class Orb {
     if (id === 0) return null;                  // background / disk / back hemisphere
     let global = id - 1;
     for (const l of this.layers) {
-      if (global < l.nCells) return { layer: l, index: global };
-      global -= l.nCells;
+      if (global < l.nFeatures) return { layer: l, index: global };
+      global -= l.nFeatures;
     }
     for (const l of this.pointLayers) {
       if (global < l.nPoints) return { layer: l, index: global };

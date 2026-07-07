@@ -96,31 +96,32 @@ export function subdivideTri(P, F, I, fid, ia, ib, ic) {
   rec(ia, ib, ic);
 }
 
-// Fan-fill geometry for convex one-ring cells (the DGGS hot path): positions in,
+// Fan-fill geometry for convex one-ring features (the hot path — DGGS cells are
+// the motivating case, but the input is pure geometry): positions in,
 // {pos, fids, idx} out, ready for GPU upload. Triangulation is by ring TOPOLOGY —
 // a fan (s, j, j+1), indices only — so it is coordinate-free and immune to the
-// antimeridian/pole. Cells coarse enough that flat fan triangles would render
+// antimeridian/pole. Features coarse enough that flat fan triangles would render
 // visibly wrong (straight-chord boundaries; coverage stopping short of the limb
-// for straddling cells) take the subdivideTri path instead; the apex-spoke gate
+// for limb-straddlers) take the subdivideTri path instead; the apex-spoke gate
 // cos(MAX_FILL_EDGE/2) derives from subdivideTri's split threshold so one
-// constant owns the policy. Dispatch is PER CELL: a fine cell's edges are all
-// under the split threshold, so subdivideTri would emit its fan unchanged —
-// routing only the coarse cells produces identical geometry without dragging
+// constant owns the policy. Dispatch is PER FEATURE: a fine feature's edges are
+// all under the split threshold, so subdivideTri would emit its fan unchanged —
+// routing only the coarse features produces identical geometry without dragging
 // millions of fine verts through array conversion and recursion when a few
-// giant cells share the layer (compacted mixed-resolution sets). r5/r6 cells
-// (~1°) never trip the gate, so pure-fine layers stay allocation-lean: one
-// typed index buffer, positions passed through untouched.
+// giant rings share the layer (e.g. compacted mixed-resolution DGGS sets).
+// H3-r5/r6-scale features (~1°) never trip the gate, so pure-fine layers stay
+// allocation-lean: one typed index buffer, positions passed through untouched.
 export const COS_SPOKE_GATE = Math.cos(MAX_FILL_EDGE / 2);
-export function fanFillGeometry(pos, starts, nCells) {
+export function fanFillGeometry(pos, starts, nFeatures) {
   const nVerts = pos.length / 3;
 
-  // Per-vertex feature id (the cell each vertex belongs to; style lives in a
-  // per-feature texture sampled by id). The same pass records which cells trip
-  // the coarseness gate.
+  // Per-vertex feature id (the feature each vertex belongs to; style lives in a
+  // per-feature texture sampled by id). The same pass records which features
+  // trip the coarseness gate.
   const fids = new Uint32Array(nVerts);
   let triCount = 0;
   const coarse = [];
-  for (let c = 0; c < nCells; c++) {
+  for (let c = 0; c < nFeatures; c++) {
     const s = starts[c], e = starts[c + 1], k = e - s;
     const ax = pos[s * 3], ay = pos[s * 3 + 1], az = pos[s * 3 + 2];
     let large = false;
@@ -132,18 +133,18 @@ export function fanFillGeometry(pos, starts, nCells) {
     else if (k >= 3) triCount += k - 2;
   }
 
-  // Fine cells: fans straight into a typed buffer. `coarse` is ascending, so a
-  // single pointer skips them without a per-cell Set probe.
+  // Fine features: fans straight into a typed buffer. `coarse` is ascending, so
+  // a single pointer skips them without a per-feature Set probe.
   const fineIdx = new Uint32Array(triCount * 3);
   let t = 0, ci = 0;
-  for (let c = 0; c < nCells; c++) {
+  for (let c = 0; c < nFeatures; c++) {
     if (ci < coarse.length && coarse[ci] === c) { ci++; continue; }
     const s = starts[c], e = starts[c + 1];
     for (let j = s + 1; j < e - 1; j++) { fineIdx[t++] = s; fineIdx[t++] = j; fineIdx[t++] = j + 1; }
   }
   if (!coarse.length) return { pos, fids, idx: fineIdx };
 
-  // Coarse cells: copy their verts into a small local scratch (subdivideTri
+  // Coarse features: copy their verts into a small local scratch (subdivideTri
   // needs plain-array push), subdivide, then splice the output back — local
   // originals remap through globalOf, subdivision verts append after nVerts.
   const P = [], F = [], I = [], globalOf = [];

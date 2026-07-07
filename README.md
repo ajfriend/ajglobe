@@ -63,7 +63,7 @@ import { Orb } from 'ajglobe';
 const orb = new Orb(canvas, { background: '#0b0e13', sphere: '#11151c' });
 orb.polygons({
   lnglat,           // Float32Array [lng,lat, ...]  (or xyz: [x,y,z,...])
-  starts,           // Uint32Array ring start indices (len = nCells + 1)
+  starts,           // Uint32Array ring start indices (len = nFeatures + 1)
   fill: i => [r,g,b,a],   // per-cell color, or a constant [r,g,b,a]
 });
 orb.points({

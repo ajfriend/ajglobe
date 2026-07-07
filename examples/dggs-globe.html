@@ -86,7 +86,7 @@ async function show(res){
   const buildMs = Math.round(performance.now() - t0);
   const s = orb.stats;
   document.getElementById('status').innerHTML =
-    `<b>${s.cells.toLocaleString()}</b> cells · <b>${s.verts.toLocaleString()}</b> verts · `
+    `<b>${s.features.toLocaleString()}</b> cells · <b>${s.verts.toLocaleString()}</b> verts · `
     + `built in <b>${buildMs} ms</b> · drag or arrows/WASD to rotate · scroll to zoom`;
 }
 
