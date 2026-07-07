@@ -13,13 +13,17 @@
 // primitives — polygons (fills), lines (thick AA strokes), points (disc markers).
 
 import { lnglatToVec3, lnglatToVec3Into, vec3, quat } from './glmath.js';
-import { triangulatePolygon, MAX_FILL_EDGE } from './tess.js';
-
-// Re-export the pure view converters so consumers get them from the package entry
-// alongside Orb (the core view format is { q, zoom }; these translate the rotation
-// part to/from a human-readable { lng, lat, roll }).
-export { lnglatToQuat, quatToLngLat } from './glmath.js';
+import { triangulatePolygon, subdivideTri, MAX_FILL_EDGE } from './tess.js';
 import { Camera } from './camera.js';
+
+// Re-export the pure geo helpers so consumers get them from the package entry
+// alongside Orb: the view converters (core view format is { q, zoom }; these
+// translate the rotation to/from a human-readable { lng, lat, roll }), the
+// lng/lat <-> unit-xyz converters (the documented xyz input path needs them),
+// the vec3 helpers (slerp/cross/tangent — arrows, centroids, custom geometry),
+// and the camera framing MARGIN (framed embeds set zoom: MARGIN to fill the box).
+export { lnglatToQuat, quatToLngLat, lnglatToVec3, vec3ToLngLat, vec3 } from './glmath.js';
+export { MARGIN } from './camera.js';
 
 function compile(gl, type, src) {
   const s = gl.createShader(type);
@@ -369,55 +373,13 @@ function unitDisk(r, segments = 128) {
   return { pos: new Float32Array(pos), idx: new Uint32Array(idx) };
 }
 
-// Crack-free adaptive subdivision of one fan triangle (vertex indices ia,ib,ic
-// into P) onto the sphere, so coarse fills render faithfully (§8): any edge
-// subtending more than MAX_FILL_EDGE splits at its spherical midpoint and the
-// pieces recurse; small triangles emit unchanged (no new verts). New verts
-// append to P (positions) + F (feature ids), triangles push to I. Both the
-// split test and the midpoint depend only on the edge's two endpoints, so
-// adjacent triangles — same fan or neighbouring cells — subdivide a shared edge
-// identically: no T-junction cracks (the old uniform per-triangle lattice could
-// pick different densities for fan neighbours, leaving hairline slivers along
-// shared spokes — visible on H3 res-1 cells). What subdivision buys (occlusion
-// is NOT on the list — front-hemisphere chords keep z > 0 by convexity, so the
-// depth disk can never swallow them): curved boundaries instead of straight
-// chords, and full coverage out to the limb for cells that straddle it — a flat
-// interior sags to radius cos(edge/2) inside the sphere, so a giant straddling
-// cell's surface would cross the disk plane short of the silhouette, leaving a
-// bare-disk annulus. At the threshold the residual sag is 1−cos(MAX_FILL_EDGE/2)
-// ≈ 0.001 — sub-2px at typical canvas sizes. Internal; exported for the tests.
-// (MAX_FILL_EDGE itself lives in tess.js — the split-circle sampling there
-// shares the same budget — and is imported above.)
-const COS_FILL_EDGE = Math.cos(MAX_FILL_EDGE);
-// polygons()'s fast-path gate, derived from the same constant: fan-triangle
-// edges are two apex spokes plus a ring edge bounded by their sum, so spokes
-// under MAX_FILL_EDGE/2 keep every edge below the split threshold — the flat
-// fast path then emits exactly what subdivideTri would. The same value doubles
-// as the depth-disk radius (_buildDisk): it is the worst-case radius of a
-// subdivided fill boundary's chord, so the disk rim tucks behind every fill rim.
+// polygons()'s fast-path gate, derived from tess.js's MAX_FILL_EDGE: fan-
+// triangle edges are two apex spokes plus a ring edge bounded by their sum, so
+// spokes under MAX_FILL_EDGE/2 keep every edge below the split threshold — the
+// flat fast path then emits exactly what subdivideTri would. The same value
+// doubles as the depth-disk radius (_buildDisk): it is the worst-case radius of
+// a subdivided fill boundary's chord, so the disk rim tucks behind every fill rim.
 const COS_SPOKE_GATE = Math.cos(MAX_FILL_EDGE / 2);
-export function subdivideTri(P, F, I, fid, ia, ib, ic) {
-  const dot = (i, j) => P[i * 3] * P[j * 3] + P[i * 3 + 1] * P[j * 3 + 1] + P[i * 3 + 2] * P[j * 3 + 2];
-  const mid = (i, j) => {                         // spherical midpoint of two unit vectors
-    const x = P[i * 3] + P[j * 3], y = P[i * 3 + 1] + P[j * 3 + 1], z = P[i * 3 + 2] + P[j * 3 + 2];
-    const s = 1 / (Math.hypot(x, y, z) || 1);     // ||1: exact antipodes would NaN the buffer
-    P.push(x * s, y * s, z * s); F.push(fid);
-    return P.length / 3 - 1;
-  };
-  const rec = (a, b, c) => {
-    const ab = dot(a, b) < COS_FILL_EDGE, bc = dot(b, c) < COS_FILL_EDGE, ca = dot(c, a) < COS_FILL_EDGE;
-    if (!ab && !bc && !ca) { I.push(a, b, c); return; }
-    if (ab && bc && ca) {                         // all long: 4-way split
-      const mab = mid(a, b), mbc = mid(b, c), mca = mid(c, a);
-      rec(a, mab, mca); rec(mab, b, mbc); rec(mca, mbc, c); rec(mab, mbc, mca);
-      return;
-    }
-    if (!ab) return bc ? rec(b, c, a) : rec(c, a, b);   // rotate a long edge into ab
-    const m = mid(a, b);                          // bisect it; the halves re-test the rest
-    rec(a, m, c); rec(m, b, c);
-  };
-  rec(ia, ib, ic);
-}
 
 export class Orb {
   constructor(canvas, opts = {}) {

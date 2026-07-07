@@ -3,7 +3,7 @@
 // in both adjacent triangles, or hairline slivers open along them (§8).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { subdivideTri } from '../src/orb.js';
+import { subdivideTri } from '../src/tess.js';
 import { lnglatToVec3, vec3 } from '../src/glmath.js';
 
 // Run subdivideTri over a list of triangles given as lng/lat corner triples;

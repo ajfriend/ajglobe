@@ -153,6 +153,9 @@ orb.getView();                     // -> {q, zoom}   exact, fast view
 orb.setView({ q?, zoom? });        // apply a view; idempotent (echo no-ops)
 lnglatToQuat(lng, lat, roll?);     // pure (glmath): -> q   human orientation -> quaternion
 quatToLngLat(q);                   // pure (glmath): -> {lng, lat, roll}
+lnglatToVec3(lng, lat) / vec3ToLngLat(v);  // pure: the xyz input path's converters
+vec3;                              // slerp/cross/tangent/… (arrows, centroids, custom geometry)
+MARGIN;                            // camera framing constant (framed embeds: zoom = MARGIN fills the box)
 orb.project(lng, lat);             // -> {x, y, visible}  (canvas CSS px)
 orb.unproject(x, y);               // -> {lng, lat} | null
 orb.pick(x, y);                    // -> {layer, index} | null  (GPU color picking)

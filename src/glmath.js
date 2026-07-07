@@ -26,7 +26,20 @@ export const vec3 = {
   slerp(a, b, t) {
     const om = vec3.angle(a, b);
     if (om < 1e-6) return [a[0], a[1], a[2]];
-    const so = Math.sin(om), c0 = Math.sin((1 - t) * om) / so, c1 = Math.sin(t * om) / so;
+    const so = Math.sin(om);
+    if (so < 1e-6) {
+      // (near-)antipodal: sin(om) → 0 makes the coefficients ~1/so-scale and
+      // their cancellation pure noise (a "route" scattered across the globe).
+      // Every great circle through antipodes is equally valid — take a
+      // deterministic one via an axis orthogonal to a (same probing as
+      // quat.fromUnitVectors) so densified paths are stable.
+      let u = vec3.cross(a, [1, 0, 0]);
+      if (vec3.len(u) < 1e-6) u = vec3.cross(a, [0, 1, 0]);
+      u = vec3.norm(u);
+      const c0 = Math.cos(t * om), c1 = Math.sin(t * om);
+      return [a[0] * c0 + u[0] * c1, a[1] * c0 + u[1] * c1, a[2] * c0 + u[2] * c1];
+    }
+    const c0 = Math.sin((1 - t) * om) / so, c1 = Math.sin(t * om) / so;
     return [a[0] * c0 + b[0] * c1, a[1] * c0 + b[1] * c1, a[2] * c0 + b[2] * c1];
   },
 };

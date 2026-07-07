@@ -43,6 +43,48 @@ export const MAX_FILL_EDGE = 0.09;
 // coincidence; deriving one from the other would be wrong.
 export const HEMI_MARGIN = 0.02;   // exported for the unit tests
 
+// Crack-free adaptive subdivision of one triangle (vertex indices ia,ib,ic
+// into P) onto the sphere, so coarse fills render faithfully: any edge
+// subtending more than MAX_FILL_EDGE splits at its spherical midpoint and the
+// pieces recurse; small triangles emit unchanged (no new verts). New verts
+// append to P (positions) + F (feature ids), triangles push to I. Both the
+// split test and the midpoint depend only on the edge's two endpoints, so
+// adjacent triangles — same fan or neighbouring cells — subdivide a shared edge
+// identically: no T-junction cracks (a uniform per-triangle lattice picked
+// different densities for fan neighbours, leaving hairline slivers along
+// shared spokes — visible on H3 res-1 cells). What subdivision buys (occlusion
+// is NOT on the list — front-hemisphere chords keep z > 0 by convexity, so the
+// depth disk can never swallow them): curved boundaries instead of straight
+// chords, and full coverage out to the limb for cells that straddle it — a flat
+// interior sags to radius cos(edge/2) inside the sphere, so a giant straddling
+// cell's surface would cross the disk plane short of the silhouette, leaving a
+// bare-disk annulus. At the threshold the residual sag is 1−cos(MAX_FILL_EDGE/2)
+// ≈ 0.001 — sub-2px at typical canvas sizes. Consumed by orb's fill paths;
+// deliberately NOT re-exported from the package entry (internal signature).
+const COS_FILL_EDGE = Math.cos(MAX_FILL_EDGE);
+export function subdivideTri(P, F, I, fid, ia, ib, ic) {
+  const dot = (i, j) => P[i * 3] * P[j * 3] + P[i * 3 + 1] * P[j * 3 + 1] + P[i * 3 + 2] * P[j * 3 + 2];
+  const mid = (i, j) => {                         // spherical midpoint of two unit vectors
+    const x = P[i * 3] + P[j * 3], y = P[i * 3 + 1] + P[j * 3 + 1], z = P[i * 3 + 2] + P[j * 3 + 2];
+    const s = 1 / (Math.hypot(x, y, z) || 1);     // ||1: exact antipodes would NaN the buffer
+    P.push(x * s, y * s, z * s); F.push(fid);
+    return P.length / 3 - 1;
+  };
+  const rec = (a, b, c) => {
+    const ab = dot(a, b) < COS_FILL_EDGE, bc = dot(b, c) < COS_FILL_EDGE, ca = dot(c, a) < COS_FILL_EDGE;
+    if (!ab && !bc && !ca) { I.push(a, b, c); return; }
+    if (ab && bc && ca) {                         // all long: 4-way split
+      const mab = mid(a, b), mbc = mid(b, c), mca = mid(c, a);
+      rec(a, mab, mca); rec(mab, b, mbc); rec(mca, mbc, c); rec(mab, mbc, mca);
+      return;
+    }
+    if (!ab) return bc ? rec(b, c, a) : rec(c, a, b);   // rotate a long edge into ab
+    const m = mid(a, b);                          // bisect it; the halves re-test the rest
+    rec(a, m, c); rec(m, b, c);
+  };
+  rec(ia, ib, ic);
+}
+
 // ---- shared ear-clip skeleton ----------------------------------------------
 // orient(a,b,c): >0 for a CCW corner; inTri(p,a,b,c): p inside CCW triangle;
 // samePos(i,j): vertices i and j are position-identical. Clips a simple CCW
