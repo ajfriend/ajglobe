@@ -519,6 +519,9 @@ substrate from M2.
 
 ## 9. Dev & test notes
 
+- **Math glossary:** `docs/math-glossary.md` — every named theorem/algorithm
+  in the code (quaternions, slerp, gnomonic, ear clipping, Eberly bridging,
+  Bâdoiu–Clarkson, Gauss–Bonnet), where it's used, and why it earns its keep.
 - Serve (ESM + fetch need http, not file://):
   `uv run -m http.server 8080 -d /Users/aj/work/ajglobe` → `/examples/dggs-globe.html`
   (or `just test`). Examples import `../src/orb.js` directly — no build needed to dev.
