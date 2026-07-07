@@ -2,7 +2,7 @@
 // half-extent). Arcball drag and wheel zoom. Emits a change callback so the
 // renderer only redraws when something moved.
 
-import { vec3, quat, mat4, lnglatToVec3, lnglatToQuat, vec3ToLngLat } from './glmath.js';
+import { vec3, quat, mat4, lnglatToVec3, lnglatToQuat, vec3ToLngLat, DEG } from './glmath.js';
 
 // Keyboard rotation map: e.code -> signed rotation axis in the world frame
 // (pre-multiplied like the drag). Directions are by on-screen motion (verified
@@ -106,7 +106,7 @@ export class Camera {
         if (!axis) return;
         e.preventDefault();
         const scale = axis[2] !== 0 ? 1 : this.zoom;    // roll = screen-Z axis
-        const delta = quat.fromAxisAngle(axis, ((e.shiftKey ? 30 : 10) / scale) * Math.PI / 180);
+        const delta = quat.fromAxisAngle(axis, ((e.shiftKey ? 30 : 10) / scale) * DEG);
         this.q = quat.normalize(quat.multiply(delta, this.q));
         this.onChange();
       }, { signal });

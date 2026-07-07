@@ -12,7 +12,7 @@
 // texels, never the geometry. The same featureId drives GPU picking. Three
 // primitives — polygons (fills), lines (thick AA strokes), points (disc markers).
 
-import { lnglatToVec3, lnglatToVec3Into, vec3, quat } from './glmath.js';
+import { lnglatToVec3, lnglatToVec3Into, vec3, quat, DEG } from './glmath.js';
 import { triangulatePolygon, subdivideTri, MAX_FILL_EDGE } from './tess.js';
 import { Camera } from './camera.js';
 
@@ -298,7 +298,7 @@ export function smallCircleLines({ center, radius }) {
   for (const deg of Array.isArray(radius) ? radius : [radius]) {
     // clamp to the sphere's valid range: outside it, sin(θ) < 0 poisons the
     // segment count with NaN and the returned buffer with undefined slots
-    const th = Math.min(180, Math.max(0, deg)) * Math.PI / 180;
+    const th = Math.min(180, Math.max(0, deg)) * DEG;
     const ct = Math.cos(th), st = Math.sin(th);
     const segs = Math.max(8, Math.ceil((2 * Math.PI) * Math.sqrt(st) / MAX_SEG));
     const ring0 = xyz.length;
@@ -610,7 +610,6 @@ export class Orb {
   // Returns the layer; layer.update({fill}) restyles (no re-tessellation),
   // layer.remove() frees it.
   polygons({ xyz, lnglat, starts, polys, fill }) {
-    const gl = this.gl;
     const nCells = polys ? polys.length - 1 : starts.length - 1;
     const nVerts = xyz ? xyz.length / 3 : lnglat.length / 2;
 

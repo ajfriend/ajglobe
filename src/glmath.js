@@ -120,7 +120,7 @@ export const quat = {
   },
 };
 
-const DEG = Math.PI / 180;
+export const DEG = Math.PI / 180;
 
 // Object-space unit "north" (∂position/∂lat) at a lng/lat in degrees — the tangent
 // pointing toward the north pole. Used to define/read the screen roll of an orientation.
