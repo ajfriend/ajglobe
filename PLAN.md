@@ -197,7 +197,8 @@ substrate from M2.
         Reworked 2026-07-06: the uniform per-triangle lattice left T-junction
         slivers (visible on H3 res 1); now recursive spherical-midpoint bisection
         (`subdivideTri`), crack-free by construction — see §8.
-  - [ ] document `xyz` vs `lnglat` input (README/JSDoc — deferred to M5 polish)
+  - [x] document `xyz` vs `lnglat` input — README "Use" section (xyz must be
+        unit-length; when to prefer each) + the three primitives' JSDoc.
 - [x] **M3 — thick AA strokes** (any open or closed path) — `lines()` expands
       each segment to a screen-space quad of constant pixel width; the fragment
       shader feathers the edges (1px alpha ramp) for AA at any width/angle/zoom.
@@ -223,7 +224,7 @@ substrate from M2.
       For shareable stills + headless batch capture. Example has a "save PNG"
       button. Verified headless: 1600×1200 PNG, transparent alpha, strokes scale
       with output res, live canvas untouched.
-- [ ] **M5 — reference-geometry helpers + polish**
+- [x] **M5 — reference-geometry helpers + polish** — done 2026-07-06
   - [x] `lines()` primitive over open polylines — done with M3 (thick AA strokes
         + slerp densification). Coastline overlay demo in the example.
   - [x] **`coastlines(opts)` / `borders(opts)` — CDN-backed, zero bundled data.**
@@ -243,7 +244,10 @@ substrate from M2.
         Antarctica is a clean polar ring (stub gone) and the Bering/Pacific is clean.
   - [x] demo: `examples/reference-detail.html` — single globe, coastlines/borders
         toggles + 110m/50m/10m detail + view presets (Aegean/Britain/Europe/world).
-  - [ ] more examples, README, `dist/` esbuild bundle, basic geometry unit tests
+  - [x] README (aligned to the §1 reframe; xyz/lnglat docs), `dist/` esbuild
+        bundle (§9), geometry unit tests (glmath, camera, geojsonLines,
+        subdivideTri — 25 passing). More examples stay nice-to-have; three ship
+        today (dggs-globe, dggs-compare, reference-detail).
 - [x] **M6 — `points()` primitive** — the third GeoJSON primitive. Each point is a
       screen-space round disc of constant pixel size at its unit-sphere position,
       billboarded in the vertex shader (offset `clip.xy`, keep the center's depth) so

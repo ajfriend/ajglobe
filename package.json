@@ -1,7 +1,7 @@
 {
   "name": "ajglobe",
   "version": "0.0.1",
-  "description": "Correct, fast orthographic globe rendering for polygons, lines and points — no antimeridian or pole hacks, by construction.",
+  "description": "General, fast orthographic globe rendering of points, lines, and polygons — a GPU 3D scene at DGGS scale, antimeridian/pole-correct by construction.",
   "type": "module",
   "main": "./dist/ajglobe.min.js",
   "module": "./dist/ajglobe.min.js",
@@ -17,7 +17,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "serve": "python3 -m http.server 8080",
+    "serve": "uv run -m http.server 8080",
     "test": "node --test",
     "build": "npm run build:esm && npm run build:iife",
     "build:esm": "esbuild src/orb.js --bundle --format=esm --minify --sourcemap --external:https://* --outfile=dist/ajglobe.min.js",

@@ -499,7 +499,7 @@ export class Orb {
   }
 
   // Add a filled-polygon layer.
-  //   xyz | lnglat : Float32Array of vertex positions (3/vertex or 2/vertex)
+  //   xyz | lnglat : Float32Array positions (3/vertex unit xyz, or 2/vertex lng,lat)
   //   starts       : Uint32Array ring start indices (len = nFeatures + 1)
   //   fill         : (featureIndex) => [r,g,b,a] | '#rrggbb' | constant
   // Returns the layer; layer.update({fill}) restyles (no re-tessellation),
