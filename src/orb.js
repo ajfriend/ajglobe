@@ -113,6 +113,18 @@ void main() { gl_Position = u_mvp * vec4(a_pos, 1.0); }`;
 // width. Project both endpoints, take the screen-space perpendicular, and offset
 // this vertex by side * (halfWidth + 1px AA pad). v_dist carries the signed pixel
 // distance from the centerline so the fragment shader can feather the edges.
+// Strokes and points sit ON the unit sphere (radius 1.0, same surface as fills)
+// and win the depth test via a small constant NDC bias applied in the vertex
+// shader — NOT a radial lift. A radial lift moves geometry sideways in screen
+// space at the limb (lines visibly float off the silhouette) while its depth
+// component vanishes there (radial ⊥ view) — weakest exactly where z-fighting
+// is worst. The NDC bias displaces nothing and is uniformly effective at every
+// view angle. Size: must exceed the worst chord sag of densified stroke
+// segments below the sphere ((1−cos(MAX_SEG/2)) ≈ 3e-4 world ≈ 6e-5 NDC) plus
+// depth quantization; small enough that the back-hemisphere wraparound it
+// allows (view z > −bias/depthScale ≈ −0.0025) stays sub-pixel at the limb.
+const DEPTH_BIAS_GLSL = `  gl_Position.z -= 0.0005 * gl_Position.w;`;
+
 const STROKE_VS = `#version 300 es
 in vec3 a_pA;
 in vec3 a_pB;
@@ -133,6 +145,7 @@ void main() {
   float w = u_hw + 1.0;     // +1px so the AA ramp has room
   clip.xy += (nrm * a_param.y * w) / (u_viewport * 0.5) * clip.w;
   gl_Position = clip;
+${DEPTH_BIAS_GLSL}
   v_dist = a_param.y * w;
 }`;
 
@@ -155,7 +168,7 @@ void main() {
 // VAO drives both the color and the pick program (like FILL_VS).
 const POINT_VS = `#version 300 es
 layout(location = 0) in vec2 a_corner;     // unit-quad corner (-1/+1, -1/+1)
-layout(location = 1) in vec3 a_center;     // unit-sphere xyz (lifted above fills)
+layout(location = 1) in vec3 a_center;     // unit-sphere xyz (depth-biased over fills)
 layout(location = 2) in float a_radius;    // disc radius, CSS px
 layout(location = 3) in uint a_featureId;
 uniform mat4 u_mvp;
@@ -173,6 +186,7 @@ void main() {
   vec4 clip = u_mvp * vec4(a_center, 1.0);
   clip.xy += (a_corner * pad) / (u_viewport * 0.5) * clip.w;
   gl_Position = clip;
+${DEPTH_BIAS_GLSL}
 }`;
 
 // Round disc with a 1px radial AA edge (radial analog of STROKE_FS). Color/alpha from
@@ -612,19 +626,17 @@ export class Orb {
   // Add a polyline layer drawn as thick, antialiased great-circle strokes (M3).
   // Each segment is expanded to a screen-space quad of constant pixel width with
   // edges feathered for AA (see STROKE_VS/FS), and long segments are slerp-
-  // densified so the stroke follows the great-circle arc. Strokes ride at radius
-  // ~1.0015 so they sit just above fills but still depth-test against the depth disk
-  // (back-hemisphere strokes hidden). Coordinate-free: drawn in 3D, so the
-  // antimeridian is just adjacent points on the sphere — no unwrap, no seam.
+  // densified so the stroke follows the great-circle arc. Strokes sit ON the unit
+  // sphere and draw over fills via the shader depth bias (see DEPTH_BIAS_GLSL) —
+  // no radial lift, so nothing floats off the silhouette at the limb — while still
+  // depth-testing against the depth disk (back-hemisphere strokes hidden).
+  // Coordinate-free: drawn in 3D, so the antimeridian is just adjacent points on
+  // the sphere — no unwrap, no seam.
   //   xyz | lnglat : Float32Array positions (3/vertex unit xyz, or 2/vertex lng,lat)
   //   starts       : Uint32Array polyline start indices (len = nLines + 1)
   //   color        : '#rrggbb' | [r,g,b,a]
   //   width        : stroke width in CSS pixels (default 1.5)
-  //   lift         : stroke radius above the unit sphere (default 1.0015). Bigger =
-  //                  more depth separation from fills (less z-fighting toward the
-  //                  limb), at the cost of the stroke visibly floating off the
-  //                  surface near the limb. ~1.003–1.004 is a good high-contrast range.
-  lines({ xyz, lnglat, starts, color = '#ffffff', width = 1.5, lift: R = 1.0015 }) {
+  lines({ xyz, lnglat, starts, color = '#ffffff', width = 1.5 }) {
     const gl = this.gl;
     const nLines = starts.length - 1;
     const MAX_SEG = 0.05;                         // rad; densify long edges into arcs
@@ -648,9 +660,7 @@ export class Orb {
       }
       for (let i = 0; i + 1 < dense.length; i++) {
         const a = dense[i], b = dense[i + 1];
-        const ax = a[0] * R, ay = a[1] * R, az = a[2] * R;
-        const bx = b[0] * R, by = b[1] * R, bz = b[2] * R;
-        for (let q = 0; q < 4; q++) { PA.push(ax, ay, az); PB.push(bx, by, bz); }
+        for (let q = 0; q < 4; q++) { PA.push(a[0], a[1], a[2]); PB.push(b[0], b[1], b[2]); }
         PRM.push(0, -1, 0, 1, 1, -1, 1, 1);
         IDX.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
         base += 4;
@@ -690,7 +700,6 @@ export class Orb {
   points({ xyz, lnglat, color = '#ff3b30', size = 5 }) {
     const gl = this.gl;
     const nPoints = xyz ? xyz.length / 3 : lnglat.length / 2;
-    const R = 1.002;                              // lift above fills/strokes
     const sizeFn = asFn(size);
     const vec = (i) => this._posAt(xyz, lnglat, i);
 
@@ -701,10 +710,9 @@ export class Orb {
     let base = 0;
     for (let p = 0; p < nPoints; p++) {
       const v = vec(p), r = sizeFn(p);
-      const cx = v[0] * R, cy = v[1] * R, cz = v[2] * R;
       for (let q = 0; q < 4; q++) {
         CO.push(corners[q * 2], corners[q * 2 + 1]);
-        CEN.push(cx, cy, cz); RAD.push(r); FID.push(p);
+        CEN.push(v[0], v[1], v[2]); RAD.push(r); FID.push(p);
       }
       IDX.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
       base += 4;
@@ -740,11 +748,8 @@ export class Orb {
   // Batteries-included reference geometry (Natural Earth), fetched from a CDN and
   // drawn via lines() — the library bundles no data. detail: '110m' | '50m' | '10m'.
   // baseUrl overrides the default CDN (e.g. self-hosted GeoJSON). Returns the layer.
-  // Reference lines usually ride over polygon fills, so they default to a higher
-  // lift than raw lines(): extra depth separation kills fill z-fighting toward the
-  // limb, and is invisible over a bare sphere.
   async coastlines(opts = {}) {
-    return this._neLines({ file: 'coastline', color: '#000000', width: 1.5, stitch: false, lift: 1.0035, ...opts });
+    return this._neLines({ file: 'coastline', color: '#000000', width: 1.5, stitch: false, ...opts });
   }
   // Full country outlines (admin-0 country polygons → ring polylines), so borders
   // read as complete shapes on their own (coast included), not just inter-country
@@ -752,10 +757,10 @@ export class Orb {
   // Stitched by default (un-cuts the antimeridian/polar splits); `stitch:false` to
   // skip, or `stitch: geoStitch` to inject your own (offline / no CDN).
   async borders(opts = {}) {
-    return this._neLines({ file: 'admin_0_countries', color: '#c2185b', width: 1.2, stitch: true, lift: 1.0035, ...opts });
+    return this._neLines({ file: 'admin_0_countries', color: '#c2185b', width: 1.2, stitch: true, ...opts });
   }
 
-  async _neLines({ file, detail = '50m', color, width, baseUrl, stitch, lift }) {
+  async _neLines({ file, detail = '50m', color, width, baseUrl, stitch }) {
     const url = `${baseUrl || DEFAULT_NE}/ne_${detail}_${file}.geojson`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`ajglobe: failed to load ${url} (${res.status})`);
@@ -765,7 +770,7 @@ export class Orb {
       catch (e) { console.warn('ajglobe: geoStitch unavailable, drawing raw polygons —', e.message); }
     }
     const { lnglat, starts } = geojsonLines(gj);
-    return this.lines({ lnglat, starts, color, width, lift });
+    return this.lines({ lnglat, starts, color, width });
   }
 
   lookAt(lng, lat) { this.cam.lookAt(lng, lat); }

@@ -112,9 +112,12 @@ test/           (empty — geometry unit tests to come)
 
 Render order each frame (only when dirty): opaque screen-parallel depth disk
 (z=0 plane, drawn projection·view only — no model rotation; radius ~0.999,
-tucked behind fill rims) → polygon fills (radius 1.0) → strokes (lift 1.0015,
-reference lines 1.0035) → point discs (radius 1.002), all depth-tested against
-the disk → back hemisphere (view z < 0) occluded. Geometry is built once per
+tucked behind fill rims) → polygon fills (radius 1.0) → strokes → point discs,
+all depth-tested against the disk → back hemisphere (view z < 0) occluded.
+Strokes and points sit ON the unit sphere too; they draw over fills via a small
+constant NDC depth bias in their vertex shaders, not a radial lift — a lift
+displaced them sideways at the limb (lines visibly floated off the silhouette)
+while its depth component vanished exactly there. Geometry is built once per
 layer; rotation is just a uniform.
 
 **Core substrates (shared, primitive-agnostic — build once, reuse everywhere).**
