@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ajglobe — cells_to_poly blog port</title>
+<style>
+  body{margin:0;background:#fff;color:#333;font:16px/1.55 -apple-system,system-ui,sans-serif;}
+  main{max-width:860px;margin:0 auto;padding:28px 20px 80px;}
+  h1{font-size:1.5rem} h1 small{font-weight:400;color:#888;font-size:1rem}
+  a{color:#3273dc}
+  .fig{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:1rem;margin:1.6rem 0 .4rem;}
+  .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:0 1rem;max-width:800px;margin:1.6rem auto .4rem;justify-items:center;}
+  .globe{position:relative;}
+  .globe canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab;}
+  .globe canvas:active{cursor:grabbing;}
+  .globe canvas:focus{outline:none;}
+  /* the globe outline circle (Plot.sphere in the original): the globe is centered
+     at radius (size/2)/1.05, so the circle is 100%/1.05 of the box — valid because
+     these globes have wheel-zoom disabled and always sit at zoom 1 */
+  .globe .ring{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:calc(100%/1.05);height:calc(100%/1.05);border:1.5px solid #111;
+    border-radius:50%;pointer-events:none;}
+  .caption{max-width:640px;margin:0 auto 2rem;color:#777;font-size:.85rem;text-align:center;}
+  .arrow-sep{font-size:2rem;color:#555;}
+</style>
+</head>
+<body>
+<main>
+<h1>H3 cells → spherical polygons <small>· the <a href="https://ajfriend.com/blog/cells_to_poly/">blog post's</a> globes, re-rendered with ajglobe</small></h1>
+<p>Every globe below is <code>orb.geojson(data)</code> on the post's original GeoJSON —
+per-feature styling from <code>properties</code>, concave polygons with holes, dashed
+outlines, and a polygon larger than a hemisphere. Drag to rotate (the intro pair and
+the 2×2 grid stay in sync); double-click to reset. Wheel zoom is off, like an embed.</p>
+
+<div class="fig">
+  <div class="globe" id="g-intro-cells"></div>
+  <span class="arrow-sep">→</span>
+  <div class="globe" id="g-intro-poly"></div>
+</div>
+<p class="caption">A set of H3 cells maps to three polygons; two with no holes, and one
+with three holes. Outer loops are oriented counter-clockwise and holes are oriented
+clockwise. Drag the globe to rotate; double click to reset.</p>
+
+<div class="fig"><div class="globe" id="g-equator"></div></div>
+<p class="caption">It can be unclear which loop of a polygon is the “correct” outer
+loop. In this case, the choice is basically arbitrary: we get exactly the same
+spherical polygon with either choice.</p>
+
+<div class="grid2">
+  <div class="globe" id="g-holes-3"></div>
+  <div class="globe" id="g-holes-1"></div>
+  <div class="globe" id="g-holes-2"></div>
+  <div class="globe" id="g-holes-0"></div>
+</div>
+<p class="caption">The loops (dark red), ordered by their enclosed area (light red).
+Full polygon (dashed grey) for reference. The orientations of the loops (arrows)
+cause the first three to enclose most of the globe; the smallest area corresponds to
+the “natural” outer loop.</p>
+
+<div class="fig"><div class="globe" id="g-cross"></div></div>
+<p class="caption">Example of a polygon with no “natural” outer loop. Any of the four
+loops makes a reasonable outer loop — it crosses the antimeridian and encloses a pole,
+so it’s going to be tough to plot on a plane no matter what.</p>
+
+</main>
+<script type="module">
+import { Orb, lnglatToQuat } from '../src/orb.js';
+import { lnglatToVec3, vec3, vec3ToLngLat } from '../src/glmath.js';
+
+const load = (name) => fetch(`data/cells_to_poly/${name}.json`).then((r) => r.json());
+
+// ---- arrows along edges (the post's winding-direction pedagogy) -------------
+// One arrow per step-th edge: a shaft on the middle 10% of the edge's geodesic
+// plus a two-wing head at the tip, all unit-sphere polylines for lines().
+function addArrow(xyz, starts, p, q) {
+  const A = lnglatToVec3(p[0], p[1]), B = lnglatToVec3(q[0], q[1]);
+  const a = vec3.slerp(A, B, 0.35), b = vec3.slerp(A, B, 0.65);
+  xyz.push(...a, ...b); starts.push(xyz.length / 3);
+  const d = vec3.dot(a, b);
+  const back = vec3.norm([a[0] - d * b[0], a[1] - d * b[1], a[2] - d * b[2]]);  // tangent at tip toward shaft
+  const hl = vec3.angle(a, b) * 0.45;                   // wing arc length
+  const wing = (s) => {
+    const phi = s * 28 * Math.PI / 180;
+    const c = Math.cos(phi), sn = Math.sin(phi), bx = vec3.cross(b, back);
+    const w = [back[0] * c + bx[0] * sn, back[1] * c + bx[1] * sn, back[2] * c + bx[2] * sn];
+    return [b[0] * Math.cos(hl) + w[0] * Math.sin(hl),
+            b[1] * Math.cos(hl) + w[1] * Math.sin(hl),
+            b[2] * Math.cos(hl) + w[2] * Math.sin(hl)];
+  };
+  xyz.push(...wing(1), ...b, ...wing(-1)); starts.push(xyz.length / 3);
+}
+function polygonArrows(gj, step) {
+  const xyz = [], starts = [0];
+  let edge = 0;
+  for (const f of gj.features) {
+    const g = f.geometry;
+    if (g.type !== 'Polygon' && g.type !== 'MultiPolygon') continue;
+    if (f.properties?.strokeDasharray) continue;        // reference outlines get no arrows
+    for (const rings of (g.type === 'Polygon' ? [g.coordinates] : g.coordinates)) {
+      for (const ring of rings) {
+        for (let i = 0; i + 1 < ring.length; i++) {
+          if (edge++ % step === 0) addArrow(xyz, starts, ring[i], ring[i + 1]);
+        }
+      }
+    }
+  }
+  return { xyz: new Float32Array(xyz), starts: new Uint32Array(starts) };
+}
+function lineArrows(gj) {                               // per-feature arrowStep on LineStrings
+  const out = [];
+  for (const f of gj.features) {
+    if (f.geometry.type !== 'LineString') continue;
+    const step = f.properties?.arrowStep ?? (f.properties?.arrow ? 1 : 0);
+    if (!step) continue;
+    const xyz = [], starts = [0], c = f.geometry.coordinates;
+    for (let i = 0; i + 1 < c.length; i++) {
+      if (i % step === 0) addArrow(xyz, starts, c[i], c[i + 1]);
+    }
+    out.push({ xyz: new Float32Array(xyz), starts: new Uint32Array(starts),
+               color: f.properties?.stroke || '#8b0000' });
+  }
+  return out;
+}
+
+// data centroid -> home view (vertex mean; falls back to the first vertex for
+// degenerate data like the equator loops, whose mean is ~the zero vector)
+function homeOf(gj) {
+  const m = [0, 0, 0];
+  let n = 0, first = null;
+  const add = (c) => { const v = lnglatToVec3(c[0], c[1]); first ??= c; m[0] += v[0]; m[1] += v[1]; m[2] += v[2]; n++; };
+  for (const f of gj.features) {
+    const g = f.geometry, C = g.coordinates;
+    if (g.type === 'Point') add(C);
+    else if (g.type === 'LineString') C.forEach(add);
+    else if (g.type === 'Polygon') C.forEach((r) => r.forEach(add));
+    else if (g.type === 'MultiPolygon') C.forEach((p) => p.forEach((r) => r.forEach(add)));
+  }
+  if (vec3.len(m) / n < 0.1) return { lng: first[0], lat: first[1] };
+  const ll = vec3ToLngLat(vec3.norm(m));
+  return { lng: ll.lng, lat: ll.lat };
+}
+
+// ---- one globe --------------------------------------------------------------
+const syncOrbs = [];                                    // shared-rotation group
+let syncHome = null;                                    // first synced globe wins (like the blog)
+
+async function globe(id, name, { size, arrowStep = 0, sync = true }) {
+  const holder = document.getElementById(id);
+  holder.style.width = holder.style.height = `${size}px`;
+  const canvas = document.createElement('canvas');
+  holder.appendChild(canvas);
+  holder.insertAdjacentHTML('beforeend', '<div class="ring"></div>');
+
+  const orb = new Orb(canvas, {
+    background: '#ffffff', sphere: '#ffffff',
+    interaction: { wheel: false },                      // embeds keep the page's scroll
+  });
+  const gj = await load(name);
+  orb.coastlines({ detail: '110m', color: [136, 136, 187, 205], width: 0.8 });
+  orb.graticule({ color: [0, 0, 0, 16], width: 1 });
+  orb.geojson(gj);
+  if (arrowStep) orb.lines({ ...polygonArrows(gj, arrowStep), color: '#8b0000', width: 1.5 });
+  for (const la of lineArrows(gj)) orb.lines({ xyz: la.xyz, starts: la.starts, color: la.color, width: 2 });
+
+  const home = sync ? (syncHome ??= homeOf(gj)) : homeOf(gj);
+  orb.lookAt(home.lng, home.lat);
+  canvas.addEventListener('dblclick', () => orb.setView({ q: lnglatToQuat(home.lng, home.lat, 0), zoom: 1 }));
+
+  if (sync) {
+    for (const other of syncOrbs) {                     // the idempotent setView
+      orb.on('viewchange', () => other.setView(orb.getView()));       // swallows echoes,
+      other.on('viewchange', () => orb.setView(other.getView()));     // so no guard flags
+    }
+    syncOrbs.push(orb);
+  }
+  return orb;
+}
+
+// first synced globe pins the shared home view (like the blog's shortcode),
+// so await it before launching the rest in parallel
+await globe('g-intro-cells', 'intro_cells', { size: 360 });
+await Promise.all([
+  globe('g-intro-poly', 'intro_poly', { size: 360, arrowStep: 3 }),
+  globe('g-equator', 'equator', { size: 500, sync: false }),
+  globe('g-holes-3', 'holes_3', { size: 390, arrowStep: 3 }),
+  globe('g-holes-1', 'holes_1', { size: 390, arrowStep: 3 }),
+  globe('g-holes-2', 'holes_2', { size: 390, arrowStep: 3 }),
+  globe('g-holes-0', 'holes_0', { size: 390, arrowStep: 3 }),
+  globe('g-cross', 'cross', { size: 600, arrowStep: 3, sync: false }),
+]);
+window.ready = true;                                    // headless test hook
+</script>
+</body>
+</html>

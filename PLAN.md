@@ -144,6 +144,10 @@ orb.lines({ lnglat|xyz, starts, color, width });   // thick AA great-circle stro
 orb.graticule({ step?, latLimit?, color?, width? });  // meridian/parallel grid (sync; pure geometry)
 smallCircleLines({ center, radius });  // pure: closed ring(s) at angular radius | radius[] (range rings, parallels)
 orb.points({ lnglat|xyz, color, size });           // round disc markers (per-feature)
+orb.polygons({ ..., polys });      // ring-grouped: concave polygons + holes (tess.js; annotation scale)
+orb.geojson(gj, defaults?);        // FeatureCollection styled from properties (fill/stroke/…); -> {layers, remove}
+orb.lines({ ..., dash: [on, off] });  // dashed strokes (CSS px along the arc)
+new Orb(canvas, { interaction: { drag?, wheel?, keys? } });  // gate user input (embeds: wheel off)
 orb.lookAt(lng, lat);              // center a point, north up
 orb.getView();                     // -> {q, zoom}   exact, fast view
 orb.setView({ q?, zoom? });        // apply a view; idempotent (echo no-ops)
@@ -275,10 +279,23 @@ substrate from M2.
       no new GL concept. Verified headless on city markers: clean AA discs, picking
       (`pick`/`on('hover')`), back hemisphere hidden, recolor, z-order over fills/
       strokes/coastlines, `glError 0`. Demo: `cities` toggle in `reference-detail.html`.
-- [ ] **Later:** time-normalized momentum (opt-in), concave polygon fills
-      (spherical ear-clip), reuse the 3D core for 2D map projections, publish
-      to npm. *(Depth-disk occluder: done, §7. Perspective/deep zoom dropped
-      2026-07-06 — see §7.)*
+- [x] **M7 — GeoJSON layer + concave polygons (2026-07-06)** — the production
+      test: port the cells_to_poly blog globes (previously d3/Observable Plot
+      via a Hugo shortcode) to `examples/cells-to-poly.html`. What it forced:
+  - [x] **concave polygon fills with holes** — `polygons({ polys })` ring
+        grouping + `src/tess.js` (ear-clip; gnomonic or spherical-predicate
+        path; §7). Includes the quarter-sphere antipodal-vertex 'cross' case.
+  - [x] **winding is meaningful** — CW single rings fill the complement
+        (Steiner fan from the cap-center antipode); the blog's loop-orientation
+        figures depend on it (§7).
+  - [x] `geojson()` styling layer (properties-driven, simplestyle-ish; §7)
+  - [x] `interaction: { drag, wheel, keys }` — embeds keep page scroll
+  - [x] `lines({ dash })` — arc-measured, zoom-stable px dashes
+  - [x] all 8 blog globes verified against the originals; arrows/sync/
+        double-click-reset/auto-center are app code in the example
+- [ ] **Later:** time-normalized momentum (opt-in), reuse the 3D core for 2D
+      map projections, publish to npm. *(Depth-disk occluder: done, §7.
+      Concave fills: done, M7. Perspective/deep zoom dropped 2026-07-06 — §7.)*
 
 ## 7. Decisions log
 
@@ -355,6 +372,26 @@ substrate from M2.
   range/distance ring set is one call. Perfectly-round small circles at extreme
   zoom would need vertex-shader evaluation — same deferred trade as dynamic-LOD
   geodesics (§7 geodesic-path substrate).
+- **Concave/holed polygons: ear-clip in src/tess.js, two paths; winding is
+  meaningful** (2026-07-06, M7). Hemisphere-fitting polygons gnomonic-project
+  onto the tangent plane at their bounding-cap center (Bâdoiu–Clarkson) and
+  ear-clip in 2D (Eberly hole bridging; winding normalized for multi-ring).
+  Over-hemisphere polygons (pole-enclosing, antipodal points — no projection
+  center exists) ear-clip ON the sphere with triple-product predicates, trusting
+  GeoJSON RHR winding. A single CW ring fills the COMPLEMENT (sphere minus
+  loop) via a Steiner fan from the cap-center antipode — orientation is
+  semantic on a sphere (there is no unbounded outside; this is what d3-geo
+  renders and what the cells_to_poly figures teach). O(n²), annotation scale;
+  convex DGGS cells keep the fan fast path. *Unsupported:* complement polygons
+  WITH holes (CW outer + rings); non-star complements of wild shapes.
+- **geojson() is a layer above the core, not a core primitive** (2026-07-06).
+  The core speaks typed arrays + per-feature style callbacks; geojson() walks
+  a FeatureCollection and styles from properties (fill, fillOpacity, stroke,
+  strokeWidth, strokeOpacity, strokeDasharray, r — the SVG/simplestyle-ish
+  vocabulary the blog shortcode used). Per-feature LINE style is per-layer in
+  the core (M3 deferral), so outlines group into one lines() layer per distinct
+  stroke style. fill:'none' features contribute outlines only (fills write
+  depth; a zero-alpha fill would occlude fills drawn after it).
 - **Color scales in examples: linear value-based, never rank/percentile**
   (decided 2026-07-06). Rank equalizes density by construction, so on clustered
   data (DGGS aspect ratios) it amplifies sub-display-precision float noise into

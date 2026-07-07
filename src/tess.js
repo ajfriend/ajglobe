@@ -151,8 +151,25 @@ function triangulateGnomonic(P, rings, center, out) {
     return cyc;
   });
 
-  // normalize orientation: outer CCW, holes CW (don't trust the input winding)
+  // Winding is MEANINGFUL on a sphere (there is no unbounded "outside"): a CCW
+  // outer ring encloses the small side, a CW one encloses the COMPLEMENT — the
+  // convention GeoJSON's right-hand rule implies and d3-geo renders. A single
+  // CW ring therefore fills sphere-minus-loop: fan from the antipode of the cap
+  // center (the complement is star-shaped from there for cap-scale loops) and
+  // let the caller's subdivision cope with the huge triangles. Appends the
+  // antipode as a new vertex in P — callers own the parallel arrays.
   let outer = cycles[0];
+  if (rings.length === 1 && area2(pts, outer) < 0) {
+    const si = P.length / 3;
+    P.push(-center[0], -center[1], -center[2]);
+    for (let i = 0; i < outer.length; i++) {
+      out.push(si, slot.get(outer[i]), slot.get(outer[(i + 1) % outer.length]));
+    }
+    return out;
+  }
+
+  // multi-ring: normalize to outer CCW, holes CW (tolerates sloppy winding —
+  // hole-ness comes from ring order, which GeoJSON fixes as outer-first)
   if (area2(pts, outer) < 0) outer = outer.slice().reverse();
   const holes = cycles.slice(1).map((h) => (area2(pts, h) > 0 ? h.slice().reverse() : h));
   holes.sort((h1, h2) => Math.max(...h2.map((i) => pts[i * 2])) - Math.max(...h1.map((i) => pts[i * 2])));
@@ -265,9 +282,11 @@ export function capCenter(P, rings) {   // exported for the unit tests
   return c;
 }
 
-// Triangulate one spherical polygon. P: flat unit-xyz array; rings: array of
-// [start, end) vertex-index ranges (outer first, then holes; open rings — no
-// repeated closing point). Appends vertex-index triples to `out` and returns it.
+// Triangulate one spherical polygon. P: flat unit-xyz PLAIN ARRAY — the
+// complement path appends a Steiner vertex, so callers must own any parallel
+// arrays; rings: array of [start, end) vertex-index ranges (outer first, then
+// holes; open rings — no repeated closing point). Appends vertex-index triples
+// to `out` and returns it.
 export function triangulatePolygon(P, rings, out = []) {
   const c = capCenter(P, rings);
   let worst = 2;

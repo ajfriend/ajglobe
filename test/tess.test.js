@@ -59,14 +59,11 @@ function runPoly(coords, label) {
   const { P, rings } = fromCoords(coords);
   const tris = triangulatePolygon(P, rings);
 
-  const n = rings[rings.length - 1][1] - rings[0][0];
-  assert.equal(tris.length / 3, n + 2 * (rings.length - 1) - 2, `${label}: n + 2h − 2 triangles`);
-
   // Region area by Gauss-Bonnet, mirroring the implementation's winding
-  // contract: a hemisphere-fitting polygon has its winding NORMALIZED (the
-  // enclosed region is the small side of each ring — some blog figures carry
-  // mid-algorithm loops with CW "outers"); an over-hemisphere polygon trusts
-  // RHR as given (outer CCW, holes CW).
+  // contract: winding is MEANINGFUL — a single ring encloses what's on its
+  // left (CCW = small side, CW = the complement, rendered via a Steiner fan
+  // of n triangles); a multi-ring hemisphere-fitting polygon normalizes to
+  // small-side outer minus holes; an over-hemisphere polygon trusts RHR.
   const c = capCenter(P, rings);
   let worstDot = 2;
   for (const [s, e] of rings) {
@@ -75,11 +72,17 @@ function runPoly(coords, label) {
   const fits = worstDot > 0.02;
   const S = 4 * Math.PI;
   const outerA = ringArea(P, rings[0]);
-  const region = (fits ? Math.min(outerA, S - outerA) : outerA)
+  const single = rings.length === 1;
+  const complement = fits && single && outerA > 2 * Math.PI;
+  const region = (!fits || single ? outerA : Math.min(outerA, S - outerA))
     - rings.slice(1).reduce((s, r) => {
       const a = ringArea(P, r);
       return s + (fits ? Math.min(a, S - a) : S - a);
     }, 0);
+
+  const n = rings[rings.length - 1][1] - rings[0][0];
+  assert.equal(tris.length / 3, complement ? n : n + 2 * (rings.length - 1) - 2,
+    `${label}: triangle count`);
 
   let sum = 0;
   for (let t = 0; t < tris.length; t += 3) {
@@ -104,6 +107,13 @@ test('ring with a hole', () => {
     [[0, 0], [20, 0], [20, 20], [0, 20]],
     [[5, 5], [5, 12], [12, 12], [12, 5]],          // hole (CW)
   ], 'square with hole');
+});
+
+test('winding is meaningful: a CW ring fills the complement of the CCW one', () => {
+  const ccw = [[[0, 0], [10, 0], [10, 10], [0, 10]]];
+  const cw = [ccw[0].slice().reverse()];
+  runPoly(ccw, 'small CCW square');                // ~small region
+  runPoly(cw, 'CW square = complement');           // ~4π − small (Steiner fan)
 });
 
 test('every polygon in the cells_to_poly blog data triangulates validly', () => {

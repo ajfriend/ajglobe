@@ -150,6 +150,13 @@ hover a cell for its id (+ pentagon tag) and AR. Generate the data with
 `uv run scripts/gen_mu3_geom.py` (edit `RES_LIST`), then the same `gen_cells_ar.py`
 pass as above (edit its `NAMES`).
 
+`examples/cells-to-poly.html` re-renders the globes from the
+[cells_to_poly blog post](https://ajfriend.com/blog/cells_to_poly/) straight from
+their GeoJSON via `orb.geojson(data)` — per-feature styling from `properties`
+(fill/stroke/opacity/dashes), concave polygons with holes, winding-aware fills
+(a CW loop fills the complement of the sphere), synced rotation, and wheel zoom
+disabled (`interaction: { wheel: false }`) so the page keeps its scroll.
+
 ## Develop
 
 No build step is needed to use or hack on it — examples import `src/orb.js` directly.

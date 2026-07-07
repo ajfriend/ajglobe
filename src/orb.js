@@ -13,6 +13,7 @@
 // primitives — polygons (fills), lines (thick AA strokes), points (disc markers).
 
 import { lnglatToVec3, lnglatToVec3Into, vec3, quat } from './glmath.js';
+import { triangulatePolygon } from './tess.js';
 
 // Re-export the pure view converters so consumers get them from the package entry
 // alongside Orb (the core view format is { q, zoom }; these translate the rotation
@@ -611,13 +612,20 @@ export class Orb {
 
   // Add a filled-polygon layer.
   //   xyz | lnglat : Float32Array positions (3/vertex unit xyz, or 2/vertex lng,lat)
-  //   starts       : Uint32Array ring start indices (len = nFeatures + 1)
+  //   starts       : Uint32Array ring start indices (len = nRings + 1); open
+  //                  rings — no repeated closing point
+  //   polys        : optional ring-group indices into starts (len = nFeatures+1).
+  //                  Without it, every ring is one CONVEX feature (the DGGS fast
+  //                  path: topology-fan fills). With it, each feature is one
+  //                  polygon of one-or-more rings (outer + holes), triangulated
+  //                  by src/tess.js — concave shapes and holes render correctly,
+  //                  at annotation scale (hundreds of verts per polygon).
   //   fill         : (featureIndex) => [r,g,b,a] | '#rrggbb' | constant
   // Returns the layer; layer.update({fill}) restyles (no re-tessellation),
   // layer.remove() frees it.
-  polygons({ xyz, lnglat, starts, fill }) {
+  polygons({ xyz, lnglat, starts, polys, fill }) {
     const gl = this.gl;
-    const nCells = starts.length - 1;
+    const nCells = polys ? polys.length - 1 : starts.length - 1;
     let nVerts = xyz ? xyz.length / 3 : lnglat.length / 2;
 
     // positions -> unit-sphere xyz
@@ -630,6 +638,8 @@ export class Orb {
         lnglatToVec3Into(pos, v * 3, lnglat[v * 2], lnglat[v * 2 + 1]);
       }
     }
+
+    if (polys) return this._polygonsTess({ pos, starts, polys, nCells, fill });
 
     // Per-vertex feature id (the cell each vertex belongs to). Style is NOT baked
     // here — it lives in a per-feature texture sampled by id (built below), so a
@@ -679,6 +689,28 @@ export class Orb {
       nVerts = pos.length / 3;
     }
 
+    return this._fillLayer(pos, fids, idx, nCells, fill);
+  }
+
+  // Ring-grouped (concave/holed) polygons: triangulate each group with
+  // src/tess.js, then push every triangle through subdivideTri like the fan
+  // path (curved boundaries + limb coverage are the same need either way).
+  _polygonsTess({ pos, starts, polys, nCells, fill }) {
+    const P = Array.from(pos), F = new Array(pos.length / 3).fill(0), I = [];
+    for (let p = 0; p < nCells; p++) {
+      const rings = [];
+      for (let r = polys[p]; r < polys[p + 1]; r++) rings.push([starts[r], starts[r + 1]]);
+      for (let v = rings[0][0]; v < rings[rings.length - 1][1]; v++) F[v] = p;
+      const tris = triangulatePolygon(P, rings);      // may append a Steiner vertex
+      while (F.length < P.length / 3) F.push(p);
+      for (let t = 0; t < tris.length; t += 3) subdivideTri(P, F, I, p, tris[t], tris[t + 1], tris[t + 2]);
+    }
+    return this._fillLayer(new Float32Array(P), new Uint32Array(F), new Uint32Array(I), nCells, fill);
+  }
+
+  // Shared tail of the fill paths: style texture, VAO, layer handle.
+  _fillLayer(pos, fids, idx, nCells, fill) {
+    const gl = this.gl;
     // Per-feature style: one RGBA8 texel per feature, indexed by id (restyle just
     // rewrites those texels; geometry is untouched).
     const { tex: styleTex, W, H, restyle } = this._makeStyle(nCells, fill);
@@ -691,7 +723,7 @@ export class Orb {
     gl.bindVertexArray(null);
 
     const layer = {
-      vao, count: idx.length, nCells, nVerts,
+      vao, count: idx.length, nCells, nVerts: pos.length / 3,
       styleTex, styleW: W, styleH: H, _buffers: [pb, fb, ib],
     };
     layer.update = ({ fill: f } = {}) => { if (f != null) restyle(f); return layer; };
@@ -841,6 +873,110 @@ export class Orb {
   //   color, width : as lines() (defaults tuned to read as a quiet backdrop)
   graticule({ step, latLimit, color = '#b7c2cc', width = 1 } = {}) {
     return this.lines({ ...graticuleLines({ step, latLimit }), color, width });
+  }
+
+  // GeoJSON convenience layer: draw a FeatureCollection (or Feature / bare
+  // geometry) with per-feature styling read from feature.properties, using the
+  // SVG/simplestyle-ish vocabulary: fill, fillOpacity, stroke, strokeWidth,
+  // strokeOpacity, strokeDasharray ("on off" px), r (point radius px). Hex
+  // colors ('#rrggbb') or 'none'. `defaults` overrides the built-in defaults.
+  //
+  // Deliberately a layer ABOVE the core (like coastlines()/borders()): the
+  // core primitives speak typed arrays + style callbacks; this walks objects.
+  // All polygons share one polygons() layer (ring-grouped, so concave shapes
+  // and holes render correctly via tess.js; each polygon of a MultiPolygon is
+  // one pickable feature). Outlines and lines group into one lines() layer per
+  // distinct stroke style (line style is per-layer in the core). Points share
+  // one points() layer. Returns { layers, remove() }.
+  geojson(gj, defaults = {}) {
+    const D = {
+      fill: '#dc3545', fillOpacity: 0.45,
+      stroke: undefined, strokeWidth: 1, strokeOpacity: 0.7, strokeDasharray: null,
+      lineStroke: '#dc3545', lineWidth: 2.5, lineOpacity: 0.9,
+      r: 5, ...defaults,
+    };
+    const features = gj.type === 'FeatureCollection' ? gj.features
+      : gj.type === 'Feature' ? [gj] : [{ geometry: gj, properties: {} }];
+
+    const rgba = (color, opacity) => {
+      const c = hexRGBA(color);
+      return [c[0], c[1], c[2], Math.round(c[3] * opacity)];
+    };
+    const dashOf = (v) => (v == null ? null : Array.isArray(v) ? v : String(v).trim().split(/[ ,]+/).map(Number));
+
+    const pos = [], starts = [0], polys = [0], polyFill = [];
+    const strokeGroups = new Map();
+    const pts = [], ptColor = [], ptSize = [];
+
+    const strokePath = (coords, closed, color, width, opacity, dash) => {
+      if (!color || color === 'none' || opacity <= 0 || width <= 0) return;
+      const key = `${color}|${width}|${opacity}|${dash}`;
+      let g = strokeGroups.get(key);
+      if (!g) strokeGroups.set(key, g = { pos: [], starts: [0], color: rgba(color, opacity), width, dash: dashOf(dash) });
+      for (const c of coords) g.pos.push(c[0], c[1]);
+      if (closed) g.pos.push(coords[0][0], coords[0][1]);
+      g.starts.push(g.pos.length / 2);
+    };
+
+    for (const f of features) {
+      const g = f.geometry;
+      if (!g) continue;
+      const p = f.properties || {};
+      if (g.type === 'Polygon' || g.type === 'MultiPolygon') {
+        const fill = p.fill ?? D.fill;
+        const stroke = p.stroke ?? D.stroke ?? (fill === 'none' ? D.fill : fill);   // like SVG, stroke defaults to the fill
+        // fill 'none' features contribute outlines only — fills write depth, so
+        // even a zero-alpha fill would occlude filled features drawn after it
+        const filled = fill !== 'none' && (p.fillOpacity ?? D.fillOpacity) > 0;
+        for (const rings of (g.type === 'Polygon' ? [g.coordinates] : g.coordinates)) {
+          for (const ring of rings) {
+            const open = ring.length > 1 && ring[0][0] === ring[ring.length - 1][0]
+              && ring[0][1] === ring[ring.length - 1][1] ? ring.slice(0, -1) : ring;
+            if (filled) {
+              for (const c of open) pos.push(c[0], c[1]);
+              starts.push(pos.length / 2);
+            }
+            strokePath(open, true, stroke, p.strokeWidth ?? D.strokeWidth,
+              p.strokeOpacity ?? D.strokeOpacity, p.strokeDasharray ?? D.strokeDasharray);
+          }
+          if (filled) {
+            polys.push(starts.length - 1);
+            polyFill.push(rgba(fill, p.fillOpacity ?? D.fillOpacity));
+          }
+        }
+      } else if (g.type === 'LineString' || g.type === 'MultiLineString') {
+        for (const coords of (g.type === 'LineString' ? [g.coordinates] : g.coordinates)) {
+          strokePath(coords, false, p.stroke ?? D.lineStroke, p.strokeWidth ?? D.lineWidth,
+            p.strokeOpacity ?? D.lineOpacity, p.strokeDasharray ?? D.strokeDasharray);
+        }
+      } else if (g.type === 'Point' || g.type === 'MultiPoint') {
+        for (const c of (g.type === 'Point' ? [g.coordinates] : g.coordinates)) {
+          pts.push(c[0], c[1]);
+          ptColor.push(rgba(p.fill ?? D.fill, 1));
+          ptSize.push(p.r ?? D.r);
+        }
+      }
+    }
+
+    const layers = [];
+    if (polys.length > 1) {
+      layers.push(this.polygons({
+        lnglat: new Float32Array(pos), starts: new Uint32Array(starts),
+        polys: new Uint32Array(polys), fill: (i) => polyFill[i],
+      }));
+    }
+    for (const g of strokeGroups.values()) {
+      layers.push(this.lines({
+        lnglat: new Float32Array(g.pos), starts: new Uint32Array(g.starts),
+        color: g.color, width: g.width, dash: g.dash,
+      }));
+    }
+    if (pts.length) {
+      layers.push(this.points({
+        lnglat: new Float32Array(pts), color: (i) => ptColor[i], size: (i) => ptSize[i],
+      }));
+    }
+    return { layers, remove: () => layers.forEach((l) => l.remove()) };
   }
 
   // Batteries-included reference geometry (Natural Earth), fetched from a CDN and
