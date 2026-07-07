@@ -18,8 +18,8 @@ The technical bet: **never parameterize to 2D.**
   touching `lng/lat`. Antimeridian and pole correctness fall out for free: a
   polygon on a sphere has no seam, and a wrongly-wound loop can't fill the
   complement because there's no 2D winding to get wrong.
-- The back hemisphere is hidden by an opaque depth sphere, which also gives a
-  solid globe and removes see-through gaps.
+- The back hemisphere is hidden by an opaque screen-parallel depth disk, which
+  also gives a solid globe and removes see-through gaps.
 
 Just as important, the globe **lives on the GPU as persistent 3D geometry** —
 `lng/lat → xyz` once at build, after which rotating or zooming is a uniform

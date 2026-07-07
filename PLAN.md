@@ -28,8 +28,8 @@ once, well, and use it again and again.
 - A filled polygon (a DGGS cell, a country, anything) is triangulated by ring
   **topology** — a fan over vertex indices (`s, j, j+1`), coordinate-free — and
   lines densify by slerping unit vectors, never touching `lng/lat`.
-- The back hemisphere is hidden by an opaque depth sphere (also gives a solid
-  globe + kills see-through gaps).
+- The back hemisphere is hidden by an opaque screen-parallel depth disk (also
+  gives a solid globe + kills see-through gaps; was a depth sphere — see §7).
 
 This buys two things. First, **antimeridian and pole correctness fall out for
 free** — a polygon on a sphere has no seam, and a wrongly-oriented loop can't fill
@@ -103,17 +103,19 @@ copy — never bundled into core.
 ```
 src/glmath.js   vec3 / quat / mat4 (column-major) + lnglatToVec3  — vendored, no deps
 src/camera.js   orientation quaternion + zoom; arcball drag; wheel zoom; mvp()
-src/orb.js      WebGL2: program/shader helpers, UV depth-sphere, polygons() (topology
+src/orb.js      WebGL2: program/shader helpers, depth disk, polygons() (topology
                 fan fills), render loop (dirty-flag), resize/DPR; public API
 examples/dggs-globe.html   the ivea7h r5/r6 torture test (+ HUD, viridis, data load)
 examples/data/  ivea7h_r{5,6}_{pos.f32,idx.u32,ar.f32}  (gitignored; see §9)
 test/           (empty — geometry unit tests to come)
 ```
 
-Render order each frame (only when dirty): opaque depth sphere (radius 0.998) →
-polygon fills (radius 1.0) → strokes (radius 1.0015) → point discs (radius 1.002),
-all depth-tested against the sphere → back hemisphere occluded. Geometry is built
-once per layer; rotation is just a uniform.
+Render order each frame (only when dirty): opaque screen-parallel depth disk
+(z=0 plane, drawn projection·view only — no model rotation; radius ~0.999,
+tucked behind fill rims) → polygon fills (radius 1.0) → strokes (lift 1.0015,
+reference lines 1.0035) → point discs (radius 1.002), all depth-tested against
+the disk → back hemisphere (view z < 0) occluded. Geometry is built once per
+layer; rotation is just a uniform.
 
 **Core substrates (shared, primitive-agnostic — build once, reuse everywhere).**
 Two things live *below* the primitive renderers and are consumed identically by
@@ -306,16 +308,24 @@ substrate from M2.
   permanently** (2026-07-06; was "for v1"). Perspective/deep zoom was a
   speculative nice-to-have from the original brainstorm; nothing in the thesis
   or any use case needs it, and dropping it unlocks a real simplification:
-  - **Depth-disk occluder (noted, not yet done).** In ortho, the visible/hidden
+  - **Depth-disk occluder — DONE (2026-07-06).** In ortho, the visible/hidden
     boundary is exactly the screen-parallel plane through the origin, so the
-    0.998 depth sphere can become an opaque unit *disk* in that plane (drawn in
-    view space, projection-only). Kills the 0.998 radius constant, and the
-    fill-sag/occlusion constraint vanishes by convexity (chords of front-
-    hemisphere points keep z > 0; fill-to-disk depth gap is √(1−d²) ≈ 0.06 even
-    one pixel from the limb). Subdivision then only needs to densify coarse
-    *boundary* edges for curvature — no interior lattice, no spoke gate. Cost:
-    the occluder becomes view-dependent (a special case vs. "one static scene"),
-    and it hard-commits to ortho — acceptable now that ortho is permanent.
+    0.998 depth sphere is now an opaque *disk* in that plane (drawn with
+    projection·view only — no model rotation; `Camera.vp()`). The fill-sag
+    /occlusion constraint vanished by convexity (chords of front-hemisphere
+    points keep z > 0; fill-to-disk depth gap is √(1−d²) ≈ 0.06 even one pixel
+    from the limb). *Correction to the original note:* subdivision does NOT
+    reduce to boundary-only — a giant cell straddling the limb has a flat
+    interior sagging to radius cos(edge/2) inside the sphere, so its surface
+    crosses the disk plane short of the silhouette, leaving a bare-disk
+    annulus; interior verts must be pushed onto the sphere for limb coverage.
+    `subdivideTri` + the spoke gate stay, re-justified: curved boundaries +
+    limb coverage (visual fidelity), no longer a 0.002 occlusion margin. Disk
+    radius = cos(MAX_FILL_EDGE/2) ≈ 0.999 (derived, not magic) so its rim
+    tucks behind every subdivided fill rim, as the 0.998 sphere's did. Cost
+    accepted: the occluder is view-dependent, and hard-commits to ortho.
+    Verified: red-disk leak test 0 px at zoom 0.5/1/3 (mu3 r0 + h3 r1), all
+    four examples, r6 build 404 ms, picking/sync/transparent snapshot, 25/25.
 - Fill triangulation = **topology fan** (convex rings only — true of DGGS cells,
   country borders, etc.); concave fills later.
 - **Minimal rendering core; UI composed on top** (§3).
@@ -380,6 +390,9 @@ substrate from M2.
   endpoints, so any shared edge — same fan or neighbouring cell — subdivides
   identically. Crack-free by construction (leak metric 0 px), worst-case
   interior ≥ cos(0.09/√3) ≈ 0.99865 > 0.998. Unit tests: test/subdivide.test.js.
+  *Since the depth-disk swap (§7):* sag can no longer occlude fills at all;
+  subdivision is retained for curved boundaries + limb coverage of straddling
+  cells, same threshold, same crack-free mechanism.
 - **Convex-only fills.** Topology fan assumes convexity (true for DGGS cells).
   Continents are **outline-only** (lines, no fill) so this isn't blocking;
   concave fills need spherical ear-clipping (later).

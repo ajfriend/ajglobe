@@ -3,7 +3,7 @@
 // The thesis: never parameterize to 2D. Vertices are points on the unit sphere
 // (lng/lat -> xyz once), fills are triangulated by ring TOPOLOGY (a fan over
 // vertex indices, coordinate-free), and the back hemisphere is hidden by an
-// opaque depth sphere. So the antimeridian and the poles need no special cases —
+// opaque screen-parallel depth disk. So the antimeridian and the poles need no special cases —
 // they're just points, and a pole that lies inside a convex cell is covered by
 // that cell's fan like any other interior point.
 //
@@ -98,13 +98,13 @@ out vec4 o_color;
 void main() {${PACK_ID_GLSL}
 }`;
 
-const SPHERE_FS = `#version 300 es
+const DISK_FS = `#version 300 es
 precision highp float;
 uniform vec4 u_color;
 out vec4 o_color;
 void main() { o_color = u_color; }`;
 
-const SPHERE_VS = `#version 300 es
+const DISK_VS = `#version 300 es
 in vec3 a_pos;
 uniform mat4 u_mvp;
 void main() { gl_Position = u_mvp * vec4(a_pos, 1.0); }`;
@@ -151,7 +151,7 @@ void main() {
 // Points (M6): each marker is a screen-space round disc of constant pixel radius,
 // billboarded around its unit-sphere center like a stroke quad — offset clip.xy by
 // the corner, keep the center's clip.z/w so the disc takes the center's depth (back
-// hemisphere hidden by the depth sphere). Explicit attribute locations so the same
+// hemisphere hidden by the depth disk). Explicit attribute locations so the same
 // VAO drives both the color and the pick program (like FILL_VS).
 const POINT_VS = `#version 300 es
 layout(location = 0) in vec2 a_corner;     // unit-quad corner (-1/+1, -1/+1)
@@ -257,38 +257,35 @@ function applyStitch(geoStitch, gj) {
     f.geometry ? { ...f, geometry: geoStitch(f.geometry) } : f) };
 }
 
-// UV sphere triangle mesh, radius r.
-function uvSphere(r, slices = 64, stacks = 32) {
-  const pos = [], idx = [];
-  for (let i = 0; i <= stacks; i++) {
-    const v = (i / stacks) * Math.PI, sv = Math.sin(v), cv = Math.cos(v);
-    for (let j = 0; j <= slices; j++) {
-      const u = (j / slices) * 2 * Math.PI;
-      pos.push(r * sv * Math.cos(u), r * sv * Math.sin(u), r * cv);
-    }
+// Disk triangle fan in the z=0 plane (the depth disk: drawn without the model
+// rotation, so it stays parallel to the screen).
+function unitDisk(r, segments = 128) {
+  const pos = [0, 0, 0], idx = [];
+  for (let i = 0; i <= segments; i++) {
+    const a = (i / segments) * 2 * Math.PI;
+    pos.push(r * Math.cos(a), r * Math.sin(a), 0);
   }
-  const row = slices + 1;
-  for (let i = 0; i < stacks; i++) {
-    for (let j = 0; j < slices; j++) {
-      const a = i * row + j, b = a + row;
-      idx.push(a, b, a + 1, a + 1, b, b + 1);
-    }
-  }
+  for (let i = 1; i <= segments; i++) idx.push(0, i, i + 1);
   return { pos: new Float32Array(pos), idx: new Uint32Array(idx) };
 }
 
 // Crack-free adaptive subdivision of one fan triangle (vertex indices ia,ib,ic
-// into P) onto the sphere, so coarse fills stay above the depth sphere (§8):
-// any edge subtending more than MAX_FILL_EDGE splits at its spherical midpoint
-// and the pieces recurse; small triangles emit unchanged (no new verts). New
-// verts append to P (positions) + F (feature ids), triangles push to I. Both
-// the split test and the midpoint depend only on the edge's two endpoints, so
+// into P) onto the sphere, so coarse fills render faithfully (§8): any edge
+// subtending more than MAX_FILL_EDGE splits at its spherical midpoint and the
+// pieces recurse; small triangles emit unchanged (no new verts). New verts
+// append to P (positions) + F (feature ids), triangles push to I. Both the
+// split test and the midpoint depend only on the edge's two endpoints, so
 // adjacent triangles — same fan or neighbouring cells — subdivide a shared edge
 // identically: no T-junction cracks (the old uniform per-triangle lattice could
 // pick different densities for fan neighbours, leaving hairline slivers along
-// shared spokes — visible on H3 res-1 cells). Worst case, all edges at the
-// threshold (equilateral), the interior stays above cos(MAX_FILL_EDGE/√3)
-// ≈ 0.99865 > depth sphere 0.998. Internal; exported for the unit tests.
+// shared spokes — visible on H3 res-1 cells). What subdivision buys (occlusion
+// is NOT on the list — front-hemisphere chords keep z > 0 by convexity, so the
+// depth disk can never swallow them): curved boundaries instead of straight
+// chords, and full coverage out to the limb for cells that straddle it — a flat
+// interior sags to radius cos(edge/2) inside the sphere, so a giant straddling
+// cell's surface would cross the disk plane short of the silhouette, leaving a
+// bare-disk annulus. At the threshold the residual sag is 1−cos(MAX_FILL_EDGE/2)
+// ≈ 0.001 — sub-2px at typical canvas sizes. Internal; exported for the tests.
 const MAX_FILL_EDGE = 0.09;                       // rad
 const COS_FILL_EDGE = Math.cos(MAX_FILL_EDGE);
 // polygons()'s fast-path gate, derived from the same constant: fan-triangle
@@ -332,7 +329,7 @@ export class Orb {
     // and stored as this.<name>Prog / this.<name>U (location maps, resolved once).
     const PROGRAMS = {
       fill:      [FILL_VS, FILL_FS,        ['mvp', 'style', 'styleW', 'hoverId']],
-      sphere:    [SPHERE_VS, SPHERE_FS,    ['mvp', 'color']],
+      disk:      [DISK_VS, DISK_FS,        ['mvp', 'color']],
       stroke:    [STROKE_VS, STROKE_FS,    ['mvp', 'viewport', 'hw', 'color']],
       pick:      [FILL_VS, PICK_FS,        ['mvp', 'idBase']],          // same vertex stage as fills
       point:     [POINT_VS, POINT_FS,      ['mvp', 'viewport', 'dppx', 'style', 'styleW', 'hoverId']],
@@ -349,7 +346,7 @@ export class Orb {
     this._pick = null;         // offscreen id-buffer { fbo, tex, rbo, w, h }
     this._pickValid = false;   // stale when the view / layers / size change
     this._pickPixel = new Uint8Array(4);   // reused readback scratch (per-pointer)
-    this._buildSphere();
+    this._buildDisk();
 
     this.layers = [];
     this.lineLayers = [];
@@ -367,7 +364,7 @@ export class Orb {
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
     // Per-feature opacity: fill's alpha rides in the style texture; blend it over
-    // the depth sphere. Cells don't overlap, so straight alpha needs no sorting.
+    // the depth disk. Cells don't overlap, so straight alpha needs no sorting.
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.clearColor(...this.bg);
@@ -392,8 +389,8 @@ export class Orb {
     const gl = this.gl;
     [...this.layers, ...this.lineLayers, ...this.pointLayers].forEach((l) => l.remove());   // VAOs, buffers, style textures
     if (this._pick) { this._freeTarget(this._pick); this._pick = null; }
-    gl.deleteVertexArray(this.sphereVAO);
-    this._sphereBuffers.forEach((b) => gl.deleteBuffer(b));
+    gl.deleteVertexArray(this.diskVAO);
+    this._diskBuffers.forEach((b) => gl.deleteBuffer(b));
     for (const n of this._progNames) gl.deleteProgram(this[n + 'Prog']);
   }
 
@@ -489,17 +486,30 @@ export class Orb {
     return { tex, W, H, restyle };
   }
 
-  _buildSphere() {
+  _buildDisk() {
     const gl = this.gl;
-    // Slightly inside the unit sphere so cells (at r=1) always sit in front of it
-    // and the back hemisphere of cells fails the depth test against it.
-    const m = uvSphere(0.998);
-    this.sphereCount = m.idx.length;
-    this.sphereVAO = gl.createVertexArray();
-    gl.bindVertexArray(this.sphereVAO);
-    const pb = this._attrib(this.sphereProg, 'a_pos', m.pos, 3);
+    // The depth disk: an opaque unit disk in the screen-parallel plane through
+    // the origin (drawn with projection·view only — no model rotation). In
+    // orthographic projection the visible/hidden boundary IS that plane, so the
+    // disk occludes the back hemisphere exactly (any fragment with view z < 0
+    // loses the depth test), supplies the solid globe color, and plugs gaps —
+    // everything the old 0.998 depth sphere did, with one less radius constant.
+    // Front-hemisphere fills can never sink behind it: chords of z>0 vertices
+    // keep z > 0 by convexity, and the fill-to-disk depth gap is √(1−d²) — huge
+    // everywhere except the last sub-pixel of the limb. Orthographic-only by
+    // design (PLAN §7: ortho is permanent).
+    //
+    // Radius cos(MAX_FILL_EDGE/2) — the worst-case radius of a subdivided fill
+    // boundary's chord — so the disk rim always tucks behind the fill rim
+    // instead of peeking past it as a hairline of globe color at the silhouette
+    // (the same guarantee the old 0.998 sphere gave, now derived, ~0.999).
+    const m = unitDisk(Math.cos(MAX_FILL_EDGE / 2));
+    this.diskCount = m.idx.length;
+    this.diskVAO = gl.createVertexArray();
+    gl.bindVertexArray(this.diskVAO);
+    const pb = this._attrib(this.diskProg, 'a_pos', m.pos, 3);
     const ib = this._elements(m.idx);
-    this._sphereBuffers = [pb, ib];   // kept so destroy() can free them
+    this._diskBuffers = [pb, ib];   // kept so destroy() can free them
     gl.bindVertexArray(null);
   }
 
@@ -531,10 +541,11 @@ export class Orb {
     // of a cell's fan share its id, so the fragment shader reads it 'flat'.
     //
     // The same pass flags any cell coarse enough that flat fan triangles would
-    // chord below the depth sphere (radius 0.998) and get occluded (§8). The
-    // apex-spoke gate is derived from subdivideTri's split threshold (see
-    // COS_SPOKE_GATE) so one constant owns the policy; r5/r6 cells (~1°) never
-    // trip it, so their fast path stays as-is.
+    // render visibly wrong — straight-chord boundaries, and coverage stopping
+    // short of the limb for straddling cells (see subdivideTri). The apex-spoke
+    // gate is derived from subdivideTri's split threshold (see COS_SPOKE_GATE)
+    // so one constant owns the policy; r5/r6 cells (~1°) never trip it, so
+    // their fast path stays as-is.
     let fids = new Uint32Array(nVerts);
     let triCount = 0, anyLarge = false;
     for (let c = 0; c < nCells; c++) {
@@ -559,7 +570,7 @@ export class Orb {
       }
     } else {
       // Coarse cells present: subdivide their fan triangles and project the new
-      // vertices onto the sphere so the fill stays above the depth sphere. Small
+      // vertices onto the sphere (curved boundaries + limb coverage). Small
       // triangles still emit as one flat triangle, so only coarse cells grow.
       const P = Array.from(pos), F = Array.from(fids), I = [];
       for (let c = 0; c < nCells; c++) {
@@ -602,7 +613,7 @@ export class Orb {
   // Each segment is expanded to a screen-space quad of constant pixel width with
   // edges feathered for AA (see STROKE_VS/FS), and long segments are slerp-
   // densified so the stroke follows the great-circle arc. Strokes ride at radius
-  // ~1.0015 so they sit just above fills but still depth-test against the sphere
+  // ~1.0015 so they sit just above fills but still depth-test against the depth disk
   // (back-hemisphere strokes hidden). Coordinate-free: drawn in 3D, so the
   // antimeridian is just adjacent points on the sphere — no unwrap, no seam.
   //   xyz | lnglat : Float32Array positions (3/vertex unit xyz, or 2/vertex lng,lat)
@@ -825,7 +836,7 @@ export class Orb {
     this._renderScene(this.canvas.width, this.canvas.height);
   }
 
-  // Draw the scene (depth sphere -> fills -> strokes) into the currently-bound
+  // Draw the scene (depth disk -> fills -> strokes) into the currently-bound
   // framebuffer at w x h device px. The caller binds the target and clears it, so
   // the same path serves the live frame and offscreen snapshots. Stroke width is
   // scaled by device-px-per-CSS-px so it looks identical at any output resolution.
@@ -835,10 +846,10 @@ export class Orb {
     const mvp = this.cam.mvp(w / h);
     const dppx = this.canvas.clientHeight ? h / this.canvas.clientHeight : this.dpr;
 
-    // 1) opaque background sphere (depth) -> hides the back hemisphere
-    this._drawSphere(mvp, ...this.sphereColor, 1);
+    // 1) opaque screen-parallel depth disk -> globe body + hides the back hemisphere
+    this._drawDisk(this.cam.vp(w / h), ...this.sphereColor, 1);
 
-    // 2) polygon fills (depth-tested against the sphere). Color comes from each
+    // 2) polygon fills (depth-tested against the disk). Color comes from each
     // layer's per-feature style texture, sampled by a_featureId.
     gl.useProgram(this.fillProg);
     gl.uniformMatrix4fv(this.fillU.mvp, false, mvp);
@@ -869,7 +880,7 @@ export class Orb {
     }
 
     // 4) point markers (screen-space discs) — topmost overlay. Color from each
-    // layer's per-feature style texture; depth-test against the sphere (back hidden)
+    // layer's per-feature style texture; depth-test against the disk (back hidden)
     // but don't write depth.
     if (this.pointLayers.length) {
       gl.useProgram(this.pointProg);
@@ -895,15 +906,15 @@ export class Orb {
   // any view/layer/size change). highlight() only sets _dirty — it doesn't move geometry.
   _invalidate() { this._dirty = true; this._pickValid = false; }
 
-  // Draw the depth sphere with a given color (opaque body in the main view, id 0
+  // Draw the depth disk with a given color (opaque body in the main view, id 0
   // in the pick pass). Shared by _renderScene and _renderPickScene.
-  _drawSphere(mvp, r, g, b, a) {
+  _drawDisk(mvp, r, g, b, a) {
     const gl = this.gl;
-    gl.useProgram(this.sphereProg);
-    gl.uniformMatrix4fv(this.sphereU.mvp, false, mvp);
-    gl.uniform4f(this.sphereU.color, r, g, b, a);
-    gl.bindVertexArray(this.sphereVAO);
-    gl.drawElements(gl.TRIANGLES, this.sphereCount, gl.UNSIGNED_INT, 0);
+    gl.useProgram(this.diskProg);
+    gl.uniformMatrix4fv(this.diskU.mvp, false, mvp);
+    gl.uniform4f(this.diskU.color, r, g, b, a);
+    gl.bindVertexArray(this.diskVAO);
+    gl.drawElements(gl.TRIANGLES, this.diskCount, gl.UNSIGNED_INT, 0);
   }
 
   // Free an offscreen render target ({ fbo, tex, rbo }) — pick buffer and snapshots.
@@ -937,8 +948,8 @@ export class Orb {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     const mvp = this.cam.mvp(w / h);
 
-    // depth-only occluder: the sphere writes depth (color 0 = "nothing")
-    this._drawSphere(mvp, 0, 0, 0, 0);
+    // depth-only occluder: the disk writes depth (color 0 = "nothing")
+    this._drawDisk(this.cam.vp(w / h), 0, 0, 0, 0);
 
     // fills as id-colors; u_idBase gives each layer a distinct id range
     gl.useProgram(this.pickProg);
@@ -951,7 +962,7 @@ export class Orb {
       base += l.nCells;
     }
     // point discs continue the same global id space (drawn after fills so they win
-    // where they overlap); the back hemisphere is already occluded by the sphere.
+    // where they overlap); the back hemisphere is already occluded by the disk.
     if (this.pointLayers.length) {
       gl.useProgram(this.pointPickProg);
       gl.uniformMatrix4fv(this.pointPickU.mvp, false, mvp);

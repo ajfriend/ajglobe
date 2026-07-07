@@ -49,9 +49,10 @@ test('coarse triangles subdivide; every vertex lands on the unit sphere', () => 
   }
 });
 
-test('subdivided interior stays above the depth sphere (0.998)', () => {
+test('subdivided interior hugs the sphere (bounded chord sag)', () => {
   const { P, I } = subdivide([[[0, 0], [12, 0], [0, 12]]]);
-  // sample each output triangle's interior; flat-chord sag must clear 0.998
+  // sample each output triangle's interior; residual flat-chord sag is what
+  // bounds boundary-curvature error and limb-coverage shortfall (see orb.js)
   for (let t = 0; t < I.length; t += 3) {
     const [a, b, c] = [I[t], I[t + 1], I[t + 2]];
     for (const [u, v, w] of [[1 / 3, 1 / 3, 1 / 3], [0.5, 0.5, 0], [0.5, 0, 0.5], [0, 0.5, 0.5]]) {

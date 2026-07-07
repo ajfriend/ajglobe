@@ -113,11 +113,16 @@ export class Camera {
     this.onChange();
   }
 
-  mvp(aspect) {
+  // Projection · view only (no model rotation): the matrix for screen-aligned
+  // geometry like the depth disk, which must not rotate with the globe.
+  vp(aspect) {
     const s = this._halfExtent();
     const proj = mat4.ortho(-s * aspect, s * aspect, -s, s, 0.1, 10);
-    const model = mat4.fromQuat(this.q);
-    return mat4.multiply(proj, mat4.multiply(VIEW, model));
+    return mat4.multiply(proj, VIEW);
+  }
+
+  mvp(aspect) {
+    return mat4.multiply(this.vp(aspect), mat4.fromQuat(this.q));
   }
 
   // Geographic point -> canvas CSS pixels. visible=false when the point is on
