@@ -144,7 +144,7 @@ document.getElementById('save').onclick = async ()=>{
 };
 const cursorEl = document.getElementById('cursor');
 orb.on('hover', e => {
-  orb.highlight(e.index);                          // light up the cell under the cursor (M4 picking)
+  orb.highlight(e.index, e.layer);                          // light up the cell under the cursor (M4 picking)
   cursorEl.textContent = (e.lng == null ? 'off globe'
     : `${e.lat >= 0 ? 'N' : 'S'} ${Math.abs(e.lat).toFixed(2)}°  ${e.lng >= 0 ? 'E' : 'W'} ${Math.abs(e.lng).toFixed(2)}°`)
     + (e.index != null ? `  ·  cell #${e.index.toLocaleString()}` : '');

@@ -65,9 +65,20 @@ const COS_FILL_EDGE = Math.cos(MAX_FILL_EDGE);
 export function subdivideTri(P, F, I, fid, ia, ib, ic) {
   const dot = (i, j) => P[i * 3] * P[j * 3] + P[i * 3 + 1] * P[j * 3 + 1] + P[i * 3 + 2] * P[j * 3 + 2];
   const mid = (i, j) => {                         // spherical midpoint of two unit vectors
-    const x = P[i * 3] + P[j * 3], y = P[i * 3 + 1] + P[j * 3 + 1], z = P[i * 3 + 2] + P[j * 3 + 2];
-    const s = 1 / (Math.hypot(x, y, z) || 1);     // ||1: exact antipodes would NaN the buffer
-    P.push(x * s, y * s, z * s); F.push(fid);
+    let x = P[i * 3] + P[j * 3], y = P[i * 3 + 1] + P[j * 3 + 1], z = P[i * 3 + 2] + P[j * 3 + 2];
+    const h = Math.hypot(x, y, z);
+    if (h < 1e-9) {
+      // exact antipodes: the naive midpoint is the zero vector (NaN after
+      // normalize; a zero-vector "midpoint" never converges). Any perpendicular
+      // is a valid midpoint — pick one deterministically (same probing as slerp).
+      const ax = P[i * 3], ay = P[i * 3 + 1], az = P[i * 3 + 2];
+      [x, y, z] = Math.abs(ax) < 0.9 ? [0, az, -ay] : [-az, 0, ax];   // a × x̂ or a × ŷ
+      const s = 1 / Math.hypot(x, y, z);
+      x *= s; y *= s; z *= s;
+    } else {
+      x /= h; y /= h; z /= h;
+    }
+    P.push(x, y, z); F.push(fid);
     return P.length / 3 - 1;
   };
   const rec = (a, b, c) => {

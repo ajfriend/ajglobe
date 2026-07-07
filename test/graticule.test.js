@@ -39,6 +39,14 @@ test('smallCircleLines: radius array yields one closed ring per entry, shared ce
   });
 });
 
+test('smallCircleLines clamps out-of-range radii instead of returning NaN buffers', () => {
+  for (const radius of [-5, 190]) {
+    const { xyz } = smallCircleLines({ center: [0, 0], radius });
+    assert.ok(xyz.length >= 3, 'a (degenerate) ring is still emitted');
+    for (const v of xyz) assert.ok(Number.isFinite(v), `finite (got ${v})`);
+  }
+});
+
 test('smallCircleLines: sampling converges to the geodesic policy at a great circle', () => {
   // radius 90° IS a great circle: expect ~2π/MAX_SEG (=0.02) segments
   const [ring] = polylines(smallCircleLines({ center: [0, 90], radius: 90 }));

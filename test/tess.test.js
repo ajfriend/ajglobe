@@ -52,7 +52,7 @@ function fromCoords(polyCoords) {
   return { P, rings };
 }
 
-function runPoly(coords, label) {
+function runPoly(coords, label, { looseCount = false } = {}) {
   const { P, rings } = fromCoords(coords);
   const tris = triangulatePolygon(P, rings);
 
@@ -73,7 +73,7 @@ function runPoly(coords, label) {
   // hemisphere-fitting complements go through the cap-ring split, which adds a
   // synthetic split ring + fan — only bound their count; everything else is exact
   const complement = worst > HEMI_MARGIN && outerA > 2 * Math.PI;
-  if (complement) assert.ok(tris.length / 3 > n, `${label}: triangle count`);
+  if (complement || looseCount) assert.ok(tris.length / 3 >= n - 2, `${label}: triangle count`);
   else assert.equal(tris.length / 3, n + 2 * (rings.length - 1) - 2, `${label}: triangle count`);
 
   let sum = 0;
@@ -106,6 +106,55 @@ test('winding is meaningful: a CW ring fills the complement of the CCW one', () 
   const cw = [ccw[0].slice().reverse()];
   runPoly(ccw, 'small CCW square');                // ~small region
   runPoly(cw, 'CW square = complement');           // ~4π − small (Steiner fan)
+});
+
+test('concave CW loops fill the complement correctly (no star-shape assumption)', () => {
+  // regression: the antipodal fan double-covered concave complements
+  const L = [[0, 0], [10, 0], [10, 10], [20, 10], [20, 20], [10, 20], [10, 15], [0, 15]];
+  runPoly([L.slice().reverse()], 'CW L-shape complement');
+  const C = [[0, 0], [14, 0], [14, 4], [4, 4], [4, 10], [14, 10], [14, 14], [0, 14]];
+  runPoly([C.slice().reverse()], 'CW C-shape complement');
+});
+
+test('touching rings: a hole sharing a vertex with the outer ring', () => {
+  // regression: the zero-length bridge left position-duplicates that broke
+  // ear clipping (cover was -6.11 sr vs a 0.109 sr region)
+  // pinch-dedupe removes the zero-length bridge's duplicates, so the triangle
+  // count is legitimately lower than the bridged formula — area is the invariant
+  runPoly([
+    [[0, 0], [20, 0], [20, 20], [0, 20]],
+    [[0, 0], [5, 10], [10, 5]],                    // shares (0,0); CW
+  ], 'hole touching outer (gnomonic)', { looseCount: true });
+  // complement-side region: a full lat −60° circle traversed east (region =
+  // everything north of it, > hemisphere) with a touching hole just north
+  const circle = Array.from({ length: 36 }, (_, k) => [k * 10 - 180, -60]);
+  runPoly([circle, [[-180, -60], [-170, -40], [170, -40]]],
+    'hole touching outer (complement side)', { looseCount: true });
+});
+
+test('degenerate rings emit nothing instead of flooding or crashing', () => {
+  const { P, rings } = fromCoords([[[0, 0], [10, 0]]]);          // 2-point ring
+  assert.deepEqual(triangulatePolygon(P, rings), []);
+  const one = fromCoords([[[5, 5]]]);                            // 1-point ring
+  assert.deepEqual(triangulatePolygon(one.P, one.rings), []);
+});
+
+test('scattered complement (loops wider than any hemisphere) fails loudly, not wrongly', () => {
+  const hex = (cx, cy, r) => Array.from({ length: 6 }, (_, k) => {
+    const t = (k / 6) * 2 * Math.PI;
+    return [cx + r * Math.cos(t), cy + r * Math.sin(t)];
+  });
+  const origWarn = console.warn;
+  let warned = false;
+  console.warn = () => { warned = true; };
+  try {
+    const { P, rings } = fromCoords([hex(-86, 0, 3).reverse(), hex(86, 0, 3).reverse()]);
+    const tris = triangulatePolygon(P, rings);
+    assert.deepEqual(tris, [], 'garbage output must be dropped');
+    assert.ok(warned, 'and the drop must be loud');
+  } finally {
+    console.warn = origWarn;
+  }
 });
 
 test('complement WITH holes: sphere minus two loops (both rings CW)', () => {

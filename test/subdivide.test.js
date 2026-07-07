@@ -65,6 +65,13 @@ test('subdivided interior hugs the sphere (bounded chord sag)', () => {
   }
 });
 
+test('an exactly-antipodal edge pair produces no NaN vertices', () => {
+  // regression: mid() computed 1/hypot(0,0,0) = Infinity → NaN positions
+  const P = [1, 0, 0, -1, 0, 0, 0, 1, 0], F = [0, 0, 0], I = [];
+  subdivideTri(P, F, I, 0, 0, 1, 2);
+  assert.ok(P.every(Number.isFinite), 'all vertices finite');
+});
+
 test('shared edges subdivide identically in both neighbours (no T-junctions)', () => {
   // Two very differently-shaped triangles sharing the edge (0,0)–(10,0): the old
   // per-triangle lattice picked different densities for these (crack); the split

@@ -27,6 +27,18 @@ test('lnglatToVec3 ∘ vec3ToLngLat roundtrips (incl. antimeridian, neg lng)', (
   close(vec3ToLngLat(lnglatToVec3(123, 90)).lat, 90, 1e-4);
 });
 
+test('slerp of (near-)antipodal endpoints stays on the unit sphere', () => {
+  // regression: sin(π) cancellation produced ~8e7-magnitude garbage points
+  const a = lnglatToVec3(0, 0);
+  for (const b of [lnglatToVec3(180, 0), vec3.norm([-1, 1e-8, 0])]) {
+    for (const t of [0.25, 0.5, 0.75]) {
+      const p = vec3.slerp(a, b, t);
+      close(vec3.len(p), 1, 1e-9);
+      close(vec3.angle(a, p), t * vec3.angle(a, b), 1e-5);   // uniform along the arc
+    }
+  }
+});
+
 test('lnglatToQuat ∘ quatToLngLat roundtrips lng/lat/roll', () => {
   for (const [lng, lat, roll] of [[0, 0, 0], [30, -15, 25], [-100, 40, -60], [140, 60, 170], [-3, 55, 0]]) {
     const v = quatToLngLat(lnglatToQuat(lng, lat, roll));

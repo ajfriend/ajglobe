@@ -114,7 +114,7 @@ document.querySelectorAll('[data-r]').forEach(b => b.onclick = () => show(+b.dat
 
 // Hover HUD: GPU pick → cell id (unranked), pentagon tag, skar AR.
 orb.on('hover', (e) => {
-  if (layer) orb.highlight(e.layer === layer ? e.index : -1);
+  if (layer) orb.highlight(e.layer === layer ? e.index : -1, layer);
   if (e.index == null || e.layer !== layer) { hud.innerHTML = '<span class="dim">hover a cell…</span>'; return; }
   const pent = isPentagon(cur.res, e.index) ? ' · <b>pentagon</b>' : '';
   hud.innerHTML = `<b>mu3 r${cur.res}</b> · cell <b>${cellId(cur.res, e.index)}</b>${pent} · skar AR <b>${cur.ar[e.index].toFixed(4)}</b>`;

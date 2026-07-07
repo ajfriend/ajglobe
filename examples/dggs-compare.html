@@ -71,7 +71,7 @@ right.orb.on('viewchange', () => left.orb.setView(right.orb.getView()));
 // lazy GPU pick; highlight() tints the hovered cell. Each globe reads its own data.
 const hud = document.getElementById('hud');
 const onHover = g => e => {
-  g.orb.highlight(e.index);
+  g.orb.highlight(e.index, e.layer);
   if(e.index == null){ hud.innerHTML = '<span class="dim">hover a cell…</span>'; return; }
   hud.innerHTML = `<b>H3 r${g.res}</b> · cell <b>${g.ids[e.index]}</b> · skar AR <b>${g.ar[e.index].toFixed(4)}</b>`;
 };
