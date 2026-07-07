@@ -93,15 +93,18 @@ export class Camera {
     }
     // Keyboard rotation, scoped to the (focusable) canvas so it never hijacks the
     // host page's keys. Up/Down + W/S tilt (screen X), A/D spin (screen Y),
-    // Left/Right + Q/E roll (screen Z). Step 10°, 30° with Shift. Each is a
-    // world-frame (screen-aligned) rotation, pre-multiplied like the drag.
+    // Left/Right + Q/E roll (screen Z). Step 10° (30° with Shift) DIVIDED BY
+    // ZOOM, so the on-screen motion stays constant — a drag scales the same way
+    // by construction, and a fixed world-angle step is a wild jump when zoomed
+    // in. Each is a world-frame (screen-aligned) rotation, pre-multiplied like
+    // the drag.
     if (keys) {
       if (c.tabIndex < 0) c.tabIndex = 0;
       c.addEventListener('keydown', (e) => {
         const axis = KEY_AXIS[e.code];
         if (!axis) return;
         e.preventDefault();
-        const delta = quat.fromAxisAngle(axis, (e.shiftKey ? 30 : 10) * Math.PI / 180);
+        const delta = quat.fromAxisAngle(axis, ((e.shiftKey ? 30 : 10) / this.zoom) * Math.PI / 180);
         this.q = quat.normalize(quat.multiply(delta, this.q));
         this.onChange();
       }, { signal });
