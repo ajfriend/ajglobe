@@ -410,7 +410,13 @@ export function subdivideTri(P, F, I, fid, ia, ib, ic) {
 export class Orb {
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
-    const gl = canvas.getContext('webgl2', { antialias: true, depth: true });
+    // alpha: false — the canvas owns its background (§3), so it composites as
+    // an opaque element. With a transparent-capable canvas the browser treats
+    // the framebuffer as PREMULTIPLIED and re-blends it against the page, and
+    // normal blending pollutes destination alpha (a 0.3-alpha fill leaves
+    // dst_a = 0.3² + 0.7 = 0.79) — every translucent fill/stroke washed toward
+    // the page color. Offscreen FBOs (snapshot, picking) are unaffected.
+    const gl = canvas.getContext('webgl2', { antialias: true, depth: true, alpha: false });
     if (!gl) throw new Error('WebGL2 required');
     this.gl = gl;
     this.bg = rgbaF(opts.background || '#0b0e13');
@@ -466,7 +472,10 @@ export class Orb {
     // Per-feature opacity: fill's alpha rides in the style texture; blend it over
     // the depth disk. Cells don't overlap, so straight alpha needs no sorting.
     gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    // separate alpha blend: dst alpha composites 'over' (src_a + dst_a(1−src_a))
+    // instead of inheriting the color factors — keeps offscreen-FBO alpha sane
+    // (transparent snapshots previously dipped below 255 under AA strokes).
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.clearColor(...this.bg);
 
     this._resize();
