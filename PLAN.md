@@ -268,7 +268,7 @@ substrate from M2.
       strokes/coastlines, `glError 0`. Demo: `cities` toggle in `reference-detail.html`.
 - [ ] **Later:** time-normalized momentum (opt-in), concave polygon fills
       (spherical ear-clip), reuse the 3D core for 2D map projections, publish
-      to npm, depth-disk occluder (§7). *(Perspective/deep zoom dropped
+      to npm. *(Depth-disk occluder: done, §7. Perspective/deep zoom dropped
       2026-07-06 — see §7.)*
 
 ## 7. Decisions log

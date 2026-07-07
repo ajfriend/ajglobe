@@ -120,9 +120,11 @@ void main() { gl_Position = u_mvp * vec4(a_pos, 1.0); }`;
 // component vanishes there (radial ⊥ view) — weakest exactly where z-fighting
 // is worst. The NDC bias displaces nothing and is uniformly effective at every
 // view angle. Size: must exceed the worst chord sag of densified stroke
-// segments below the sphere ((1−cos(MAX_SEG/2)) ≈ 3e-4 world ≈ 6e-5 NDC) plus
-// depth quantization; small enough that the back-hemisphere wraparound it
-// allows (view z > −bias/depthScale ≈ −0.0025) stays sub-pixel at the limb.
+// segments below the sphere ((1−cos(MAX_SEG/2)) ≈ 3e-4 world ≈ 6e-5 NDC at the
+// ortho depth scale) plus depth quantization; small enough that the back-
+// hemisphere wraparound it allows (view z > −bias/depthScale ≈ −0.0025) stays
+// sub-pixel at the limb. MAX_SEG lives here so retuning it confronts this bound.
+const MAX_SEG = 0.05;             // rad; lines() densifies longer edges into arcs
 const DEPTH_BIAS_GLSL = `  gl_Position.z -= 0.0005 * gl_Position.w;`;
 
 const STROKE_VS = `#version 300 es
@@ -305,7 +307,9 @@ const COS_FILL_EDGE = Math.cos(MAX_FILL_EDGE);
 // polygons()'s fast-path gate, derived from the same constant: fan-triangle
 // edges are two apex spokes plus a ring edge bounded by their sum, so spokes
 // under MAX_FILL_EDGE/2 keep every edge below the split threshold — the flat
-// fast path then emits exactly what subdivideTri would.
+// fast path then emits exactly what subdivideTri would. The same value doubles
+// as the depth-disk radius (_buildDisk): it is the worst-case radius of a
+// subdivided fill boundary's chord, so the disk rim tucks behind every fill rim.
 const COS_SPOKE_GATE = Math.cos(MAX_FILL_EDGE / 2);
 export function subdivideTri(P, F, I, fid, ia, ib, ic) {
   const dot = (i, j) => P[i * 3] * P[j * 3] + P[i * 3 + 1] * P[j * 3 + 1] + P[i * 3 + 2] * P[j * 3 + 2];
@@ -337,7 +341,7 @@ export class Orb {
     if (!gl) throw new Error('WebGL2 required');
     this.gl = gl;
     this.bg = rgbaF(opts.background || '#0b0e13');
-    this.sphereColor = rgbaF(opts.sphere || '#11151c');
+    this.diskColor = rgbaF(opts.sphere || '#11151c');   // public key 'sphere' names the visual globe body; drawn as the depth disk
 
     // Programs + their uniform names (each is `u_<key>` in GLSL), built in one pass
     // and stored as this.<name>Prog / this.<name>U (location maps, resolved once).
@@ -508,16 +512,13 @@ export class Orb {
     // disk occludes the back hemisphere exactly (any fragment with view z < 0
     // loses the depth test), supplies the solid globe color, and plugs gaps —
     // everything the old 0.998 depth sphere did, with one less radius constant.
-    // Front-hemisphere fills can never sink behind it: chords of z>0 vertices
-    // keep z > 0 by convexity, and the fill-to-disk depth gap is √(1−d²) — huge
-    // everywhere except the last sub-pixel of the limb. Orthographic-only by
-    // design (PLAN §7: ortho is permanent).
-    //
-    // Radius cos(MAX_FILL_EDGE/2) — the worst-case radius of a subdivided fill
-    // boundary's chord — so the disk rim always tucks behind the fill rim
-    // instead of peeking past it as a hairline of globe color at the silhouette
-    // (the same guarantee the old 0.998 sphere gave, now derived, ~0.999).
-    const m = unitDisk(Math.cos(MAX_FILL_EDGE / 2));
+    // Fills can never sink behind it (see subdivideTri's header + PLAN §7 for
+    // the convexity argument). Orthographic-only by design (§7: ortho is
+    // permanent). Radius COS_SPOKE_GATE = cos(MAX_FILL_EDGE/2) — the worst-case
+    // radius of a subdivided fill boundary's chord — so the disk rim always
+    // tucks behind the fill rim instead of peeking past it as a hairline of
+    // globe color at the silhouette (the old 0.998 sphere's guarantee, derived).
+    const m = unitDisk(COS_SPOKE_GATE);
     this.diskCount = m.idx.length;
     this.diskVAO = gl.createVertexArray();
     gl.bindVertexArray(this.diskVAO);
@@ -627,9 +628,8 @@ export class Orb {
   // Each segment is expanded to a screen-space quad of constant pixel width with
   // edges feathered for AA (see STROKE_VS/FS), and long segments are slerp-
   // densified so the stroke follows the great-circle arc. Strokes sit ON the unit
-  // sphere and draw over fills via the shader depth bias (see DEPTH_BIAS_GLSL) —
-  // no radial lift, so nothing floats off the silhouette at the limb — while still
-  // depth-testing against the depth disk (back-hemisphere strokes hidden).
+  // sphere, drawn over fills via the shader depth bias (why: see DEPTH_BIAS_GLSL)
+  // and depth-tested against the depth disk (back-hemisphere strokes hidden).
   // Coordinate-free: drawn in 3D, so the antimeridian is just adjacent points on
   // the sphere — no unwrap, no seam.
   //   xyz | lnglat : Float32Array positions (3/vertex unit xyz, or 2/vertex lng,lat)
@@ -639,7 +639,6 @@ export class Orb {
   lines({ xyz, lnglat, starts, color = '#ffffff', width = 1.5 }) {
     const gl = this.gl;
     const nLines = starts.length - 1;
-    const MAX_SEG = 0.05;                         // rad; densify long edges into arcs
     const vec = (i) => this._posAt(xyz, lnglat, i);
 
     // Per segment, 4 verts carrying both endpoints (a_pA, a_pB) + (end, side); the
@@ -690,7 +689,7 @@ export class Orb {
   }
 
   // Add a point layer: each feature is a screen-space round disc of constant pixel
-  // size at its unit-sphere position, depth-tested against the background sphere
+  // size at its unit-sphere position, depth-tested against the depth disk
   // (back-hemisphere points hidden), pickable, and styled per-feature. Markers draw
   // on top of fills and strokes.
   //   xyz | lnglat : Float32Array positions (3/vertex unit xyz, or 2/vertex lng,lat)
@@ -848,11 +847,11 @@ export class Orb {
   _renderScene(w, h) {
     const gl = this.gl;
     gl.viewport(0, 0, w, h);
-    const mvp = this.cam.mvp(w / h);
+    const { vp, mvp } = this.cam.matrices(w / h);
     const dppx = this.canvas.clientHeight ? h / this.canvas.clientHeight : this.dpr;
 
     // 1) opaque screen-parallel depth disk -> globe body + hides the back hemisphere
-    this._drawDisk(this.cam.vp(w / h), ...this.sphereColor, 1);
+    this._drawDisk(vp, ...this.diskColor, 1);
 
     // 2) polygon fills (depth-tested against the disk). Color comes from each
     // layer's per-feature style texture, sampled by a_featureId.
@@ -869,7 +868,7 @@ export class Orb {
     }
 
     // 3) thick AA stroke overlays (screen-space quads). Depth-test against the
-    // sphere (back hidden) but don't write depth — strokes are a pure overlay.
+    // disk (back hidden) but don't write depth — strokes are a pure overlay.
     if (this.lineLayers.length) {
       gl.useProgram(this.strokeProg);
       gl.uniformMatrix4fv(this.strokeU.mvp, false, mvp);
@@ -912,11 +911,12 @@ export class Orb {
   _invalidate() { this._dirty = true; this._pickValid = false; }
 
   // Draw the depth disk with a given color (opaque body in the main view, id 0
-  // in the pick pass). Shared by _renderScene and _renderPickScene.
-  _drawDisk(mvp, r, g, b, a) {
+  // in the pick pass). Shared by _renderScene and _renderPickScene. Takes the
+  // rotation-free vp matrix — the disk stays screen-aligned.
+  _drawDisk(vp, r, g, b, a) {
     const gl = this.gl;
     gl.useProgram(this.diskProg);
-    gl.uniformMatrix4fv(this.diskU.mvp, false, mvp);
+    gl.uniformMatrix4fv(this.diskU.mvp, false, vp);
     gl.uniform4f(this.diskU.color, r, g, b, a);
     gl.bindVertexArray(this.diskVAO);
     gl.drawElements(gl.TRIANGLES, this.diskCount, gl.UNSIGNED_INT, 0);
@@ -938,7 +938,7 @@ export class Orb {
 
   // Render the fills into the offscreen id-buffer: each feature's id as a color.
   // Lazy — only when the view/layers/size changed since the last pick. The depth
-  // sphere is drawn first (as id 0) so back-hemisphere cells are occluded and can't
+  // disk is drawn first (as id 0) so back-hemisphere cells are occluded and can't
   // be picked. Blend is off so ids are written exactly.
   _renderPickScene() {
     const gl = this.gl, w = this.canvas.width, h = this.canvas.height;
@@ -951,10 +951,10 @@ export class Orb {
     gl.disable(gl.BLEND);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    const mvp = this.cam.mvp(w / h);
+    const { vp, mvp } = this.cam.matrices(w / h);
 
     // depth-only occluder: the disk writes depth (color 0 = "nothing")
-    this._drawDisk(this.cam.vp(w / h), 0, 0, 0, 0);
+    this._drawDisk(vp, 0, 0, 0, 0);
 
     // fills as id-colors; u_idBase gives each layer a distinct id range
     gl.useProgram(this.pickProg);
@@ -1002,7 +1002,7 @@ export class Orb {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     // high byte is * 2^24, not << 24: a left shift past bit 30 goes negative in JS.
     const id = p[0] | (p[1] << 8) | (p[2] << 16) | (p[3] * 0x1000000);
-    if (id === 0) return null;                  // background / sphere / back hemisphere
+    if (id === 0) return null;                  // background / disk / back hemisphere
     let global = id - 1;
     for (const l of this.layers) {
       if (global < l.nCells) return { layer: l, index: global };

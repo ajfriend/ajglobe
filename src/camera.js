@@ -121,8 +121,15 @@ export class Camera {
     return mat4.multiply(proj, VIEW);
   }
 
+  // Both frame matrices, sharing one vp computation (the render passes need the
+  // pair: vp for the depth disk, mvp for everything that rotates).
+  matrices(aspect) {
+    const vp = this.vp(aspect);
+    return { vp, mvp: mat4.multiply(vp, mat4.fromQuat(this.q)) };
+  }
+
   mvp(aspect) {
-    return mat4.multiply(this.vp(aspect), mat4.fromQuat(this.q));
+    return this.matrices(aspect).mvp;
   }
 
   // Geographic point -> canvas CSS pixels. visible=false when the point is on
