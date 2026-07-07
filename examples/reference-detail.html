@@ -28,7 +28,7 @@
 <body>
 <div id="bar">
   <b>ajglobe</b> <span class="sep">·</span>
-  <button id="coast" class="on">coastlines</button><button id="border">borders</button><button id="cities">cities</button>
+  <button id="coast" class="on">coastlines</button><button id="border">borders</button><button id="cities">cities</button><button id="grat">graticule</button>
   <span class="sep">detail</span>
   <button data-d="110m">110m</button><button data-d="50m" class="on">50m</button><button data-d="10m">10m</button>
   <span class="sep">view</span>
@@ -94,6 +94,14 @@ const CITIES = [
   ['Rio', -43, -23], ['Cairo', 31, 30], ['Delhi', 77, 29], ['Cape Town', 18, -34],
   ['Los Angeles', -118, 34], ['Singapore', 104, 1],
 ];
+// graticule(): pure geometry, synchronous — no detail level, no fetch.
+let gratLayer = null;
+document.getElementById('grat').onclick = (e) => {
+  if (gratLayer) { gratLayer.remove(); gratLayer = null; e.target.classList.remove('on'); return; }
+  gratLayer = orb.graticule();
+  e.target.classList.add('on');
+};
+
 let cityLayer = null;
 document.getElementById('cities').onclick = (e) => {
   if (cityLayer) { cityLayer.remove(); cityLayer = null; e.target.classList.remove('on'); report(); return; }

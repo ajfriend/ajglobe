@@ -141,6 +141,7 @@ const layer = orb.polygons({ lnglat|xyz, starts, fill: i => [r,g,b,a] });
 layer.update({ fill });            // restyle in place (no re-tessellation)
 layer.remove();
 orb.lines({ lnglat|xyz, starts, color, width });   // thick AA great-circle strokes
+orb.graticule({ step?, latLimit?, color?, width? });  // meridian/parallel grid (sync; pure geometry)
 orb.points({ lnglat|xyz, color, size });           // round disc markers (per-feature)
 orb.lookAt(lng, lat);              // center a point, north up
 orb.getView();                     // -> {q, zoom}   exact, fast view
@@ -250,6 +251,13 @@ substrate from M2.
         Antarctica is a clean polar ring (stub gone) and the Bering/Pacific is clean.
   - [x] demo: `examples/reference-detail.html` — single globe, coastlines/borders
         toggles + 110m/50m/10m detail + view presets (Aegean/Britain/Europe/world).
+  - [x] `graticule()` overlay (added 2026-07-06, post-M5) — meridians/parallels
+        every `step`° via pure `graticuleLines()` (exported, unit-tested; no
+        data, synchronous). Parallels are small circles, so the generator
+        samples them at 2° — the great-circle chords lines() draws then deviate
+        from the parallel by <1e-4 rad, sub-pixel at any zoom. Meridians span
+        ±latLimit (default 80°) so they don't pile up at the poles. Toggle in
+        `reference-detail.html`.
   - [x] README (aligned to the §1 reframe; xyz/lnglat docs), `dist/` esbuild
         bundle (§9), geometry unit tests (glmath, camera, geojsonLines,
         subdivideTri — 25 passing). More examples stay nice-to-have; three ship

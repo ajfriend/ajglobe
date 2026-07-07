@@ -255,6 +255,29 @@ export function geojsonLines(gj) {
   return { lnglat: new Float32Array(lng), starts: new Uint32Array(starts) };
 }
 
+// Graticule polylines (meridians + parallels) as { lnglat, starts }, ready for
+// lines(). Pure geometry, no data. Parallels are SMALL circles, but lines()
+// densifies each segment along a great circle — so sample them finely (2°):
+// the great-circle chord of a 2° parallel segment deviates from the parallel by
+// < 1e-4 rad, sub-pixel at any zoom. Meridians ARE great circles, so any
+// sampling works; 2° keeps them uniform. Meridians span ±latLimit so they don't
+// pile up at the poles (d3-geo's graticule trims the same way); parallels close
+// on themselves (first point repeated at lng +180).
+export function graticuleLines({ step = 10, latLimit = 80 } = {}) {
+  const pos = [], starts = [0];
+  const FINE = 2;                                        // deg between samples
+  for (let lng = -180; lng < 180; lng += step) {         // meridians
+    for (let lat = -latLimit; lat <= latLimit; lat += FINE) pos.push(lng, lat);
+    starts.push(pos.length / 2);
+  }
+  const latMax = Math.floor(latLimit / step) * step;     // parallels at multiples of
+  for (let lat = -latMax; lat <= latMax; lat += step) {  // step, symmetric about 0
+    for (let lng = -180; lng <= 180; lng += FINE) pos.push(lng, lat);
+    starts.push(pos.length / 2);
+  }
+  return { lnglat: new Float32Array(pos), starts: new Uint32Array(starts) };
+}
+
 // d3-geo's geoStitch, loaded lazily from a CDN the first time borders() needs it
 // (pay-per-use — the core ships no dependency). It un-cuts the antimeridian/polar
 // splits that GeoJSON polygons carry for 2D validity (Russia, Antarctica), turning
@@ -742,6 +765,16 @@ export class Orb {
     this.pointLayers.push(layer);
     this._invalidate();
     return layer;
+  }
+
+  // Graticule overlay: meridians + parallels every `step` degrees (see
+  // graticuleLines). Pure geometry — synchronous, no fetch — so unlike
+  // coastlines()/borders() it returns the layer directly, not a promise.
+  //   step     : grid spacing in degrees (default 10)
+  //   latLimit : meridians span ±latLimit; parallels stay within it (default 80)
+  //   color, width : as lines() (defaults tuned to read as a quiet backdrop)
+  graticule({ step, latLimit, color = '#b7c2cc', width = 1 } = {}) {
+    return this.lines({ ...graticuleLines({ step, latLimit }), color, width });
   }
 
   // Batteries-included reference geometry (Natural Earth), fetched from a CDN and

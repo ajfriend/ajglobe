@@ -110,6 +110,7 @@ they fetch Natural Earth from a CDN (jsDelivr, pinned) and draw via `lines()`:
 ```js
 await orb.coastlines();                 // detail defaults to '50m'
 await orb.borders({ detail: '10m', color: '#c2185b' });   // full country outlines
+orb.graticule({ step: 15 });            // meridian/parallel grid — pure geometry, no fetch (sync)
 ```
 
 `coastlines()` draws Natural Earth coastlines; `borders()` draws admin-0 country
