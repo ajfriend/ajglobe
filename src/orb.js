@@ -277,6 +277,43 @@ function uvSphere(r, slices = 64, stacks = 32) {
   return { pos: new Float32Array(pos), idx: new Uint32Array(idx) };
 }
 
+// Crack-free adaptive subdivision of one fan triangle (vertex indices ia,ib,ic
+// into P) onto the sphere, so coarse fills stay above the depth sphere (§8):
+// any edge subtending more than MAX_FILL_EDGE splits at its spherical midpoint
+// and the pieces recurse; small triangles emit unchanged (no new verts). New
+// verts append to P (positions) + F (feature ids), triangles push to I. Both
+// the split test and the midpoint depend only on the edge's two endpoints, so
+// adjacent triangles — same fan or neighbouring cells — subdivide a shared edge
+// identically: no T-junction cracks (the old uniform per-triangle lattice could
+// pick different densities for fan neighbours, leaving hairline slivers along
+// shared spokes — visible on H3 res-1 cells). Worst case, all edges at the
+// threshold (equilateral), the interior stays above cos(MAX_FILL_EDGE/√3)
+// ≈ 0.99865 > depth sphere 0.998. Internal; exported for the unit tests.
+const MAX_FILL_EDGE = 0.09;                       // rad
+const COS_FILL_EDGE = Math.cos(MAX_FILL_EDGE);
+export function subdivideTri(P, F, I, fid, ia, ib, ic) {
+  const dot = (i, j) => P[i * 3] * P[j * 3] + P[i * 3 + 1] * P[j * 3 + 1] + P[i * 3 + 2] * P[j * 3 + 2];
+  const mid = (i, j) => {                         // spherical midpoint of two unit vectors
+    const x = P[i * 3] + P[j * 3], y = P[i * 3 + 1] + P[j * 3 + 1], z = P[i * 3 + 2] + P[j * 3 + 2];
+    const s = 1 / Math.hypot(x, y, z);
+    P.push(x * s, y * s, z * s); F.push(fid);
+    return P.length / 3 - 1;
+  };
+  const rec = (a, b, c) => {
+    const ab = dot(a, b) < COS_FILL_EDGE, bc = dot(b, c) < COS_FILL_EDGE, ca = dot(c, a) < COS_FILL_EDGE;
+    if (!ab && !bc && !ca) { I.push(a, b, c); return; }
+    if (ab && bc && ca) {                         // all long: 4-way split
+      const mab = mid(a, b), mbc = mid(b, c), mca = mid(c, a);
+      rec(a, mab, mca); rec(mab, b, mbc); rec(mca, mbc, c); rec(mab, mbc, mca);
+      return;
+    }
+    if (!ab) return bc ? rec(b, c, a) : rec(c, a, b);   // rotate a long edge into ab
+    const m = mid(a, b);                          // bisect it; the halves re-test the rest
+    rec(a, m, c); rec(m, b, c);
+  };
+  rec(ia, ib, ic);
+}
+
 export class Orb {
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
@@ -447,37 +484,6 @@ export class Orb {
     return { tex, W, H, restyle };
   }
 
-  // Subdivide one fan triangle (vertex indices ia,ib,ic into P) onto the sphere
-  // when it is coarse enough to sag below the depth sphere; append the new verts
-  // to P (positions) and F (feature ids) and push triangles to I. Small triangles
-  // emit unchanged (no new verts). Subdivision is uniform per triangle, so very
-  // coarse neighbours can leave hairline T-junctions — fine for reference fills.
-  _fanTri(P, F, I, fid, ia, ib, ic) {
-    const ax = P[ia * 3], ay = P[ia * 3 + 1], az = P[ia * 3 + 2];
-    const bx = P[ib * 3], by = P[ib * 3 + 1], bz = P[ib * 3 + 2];
-    const cx = P[ic * 3], cy = P[ic * 3 + 1], cz = P[ic * 3 + 2];
-    const ang = (ux, uy, uz, vx, vy, vz) => Math.acos(Math.max(-1, Math.min(1, ux * vx + uy * vy + uz * vz)));
-    const maxA = Math.max(ang(ax, ay, az, bx, by, bz), ang(bx, by, bz, cx, cy, cz), ang(ax, ay, az, cx, cy, cz));
-    const L = Math.max(1, Math.ceil(maxA / 0.12));
-    if (L === 1) { I.push(ia, ib, ic); return; }
-    const base = P.length / 3;
-    const at = (i, k) => base + (i * (i + 1) / 2 + k);    // index of lattice point (i,k)
-    for (let i = 0; i <= L; i++) {
-      for (let k = 0; k <= i; k++) {
-        const u = (L - i) / L, v = (i - k) / L, w = k / L;  // barycentric over a,b,c
-        const x = ax * u + bx * v + cx * w, y = ay * u + by * v + cy * w, z = az * u + bz * v + cz * w;
-        const inv = 1 / Math.hypot(x, y, z);                // project onto the unit sphere
-        P.push(x * inv, y * inv, z * inv); F.push(fid);
-      }
-    }
-    for (let i = 0; i < L; i++) {
-      for (let k = 0; k <= i; k++) {
-        I.push(at(i, k), at(i + 1, k), at(i + 1, k + 1));
-        if (k < i) I.push(at(i, k), at(i + 1, k + 1), at(i, k + 1));
-      }
-    }
-  }
-
   _buildSphere() {
     const gl = this.gl;
     // Slightly inside the unit sphere so cells (at r=1) always sit in front of it
@@ -554,7 +560,7 @@ export class Orb {
       const P = Array.from(pos), F = Array.from(fids), I = [];
       for (let c = 0; c < nCells; c++) {
         const s = starts[c], e = starts[c + 1];
-        for (let j = s + 1; j < e - 1; j++) this._fanTri(P, F, I, c, s, j, j + 1);
+        for (let j = s + 1; j < e - 1; j++) subdivideTri(P, F, I, c, s, j, j + 1);
       }
       pos = new Float32Array(P);
       fids = new Uint32Array(F);

@@ -194,6 +194,9 @@ substrate from M2.
         the sphere, so coarse cells stay above the depth sphere. r5/r6 keep the
         flat fast path untouched (build still ~382 ms / 7.06M verts). Verified on
         ivea7h r2 (492 cells → 14,676 verts, full coverage, no sag holes).
+        Reworked 2026-07-06: the uniform per-triangle lattice left T-junction
+        slivers (visible on H3 res 1); now recursive spherical-midpoint bisection
+        (`subdivideTri`), crack-free by construction — see §8.
   - [ ] document `xyz` vs `lnglat` input (README/JSDoc — deferred to M5 polish)
 - [x] **M3 — thick AA strokes** (any open or closed path) — `lines()` expands
       each segment to a screen-space quad of constant pixel width; the fragment
@@ -339,8 +342,16 @@ substrate from M2.
   `polygons()` now gates on the apex-spoke angle (folded into the fid pass) and,
   only when some cell trips it, subdivides those fan triangles and projects the
   new verts onto the sphere. r5/r6 stay on the flat fast path (build ~382 ms,
-  unchanged). *Remaining limitation:* subdivision is uniform per triangle, so very
-  coarse neighbours can leave hairline T-junctions (cosmetic; fine for fills).
+  unchanged). *Follow-up (2026-07-06, fixed):* the first version used a uniform
+  per-triangle lattice (`L = ceil(maxEdge/0.12)`), and adjacent fan triangles
+  could pick different L — T-junction cracks along shared spokes, visible as
+  hairline slivers of depth sphere across large cells (H3 res 1: 32% of cells
+  mixed, 360 junctions, 1209 leaked px in a 3000² render). Replaced with
+  recursive spherical-midpoint bisection (`subdivideTri`, edge threshold
+  0.09 rad): the split test and the midpoint depend only on an edge's two
+  endpoints, so any shared edge — same fan or neighbouring cell — subdivides
+  identically. Crack-free by construction (leak metric 0 px), worst-case
+  interior ≥ cos(0.09/√3) ≈ 0.99865 > 0.998. Unit tests: test/subdivide.test.js.
 - **Convex-only fills.** Topology fan assumes convexity (true for DGGS cells).
   Continents are **outline-only** (lines, no fill) so this isn't blocking;
   concave fills need spherical ear-clipping (later).
