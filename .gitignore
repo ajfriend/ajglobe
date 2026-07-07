@@ -1,5 +1,7 @@
 node_modules/
 dist/
 .DS_Store
-# example data (generated elsewhere; large binaries)
-examples/data/
+# example data (generated elsewhere; large binaries)…
+examples/data/*
+# …except the cells_to_poly GeoJSONs: small, static, the example's substrate
+!examples/data/cells_to_poly/
