@@ -28,7 +28,7 @@
 <body>
 <div id="bar">
   <b>ajglobe</b> <span class="sep">·</span>
-  <button id="coast" class="on">coastlines</button><button id="border">borders</button><button id="cities">cities</button><button id="grat">graticule</button>
+  <button id="coast" class="on">coastlines</button><button id="border">borders</button><button id="cities">cities</button><button id="grat">graticule</button><button id="rings">rings</button>
   <span class="sep">detail</span>
   <button data-d="110m">110m</button><button data-d="50m" class="on">50m</button><button data-d="10m">10m</button>
   <span class="sep">view</span>
@@ -38,7 +38,7 @@
 <canvas id="c"></canvas>
 
 <script type="module">
-import { Orb } from '../src/orb.js';
+import { Orb, smallCircleLines } from '../src/orb.js';
 
 const orb = new Orb(document.getElementById('c'), { background: '#ffffff', sphere: '#e6ebf0' });
 window.orb = orb;   // handy for the console
@@ -66,6 +66,7 @@ const fetchFn = { coast: (o) => orb.coastlines(o), border: (o) => orb.borders(o)
 
 function report(){
   const parts = ['coast', 'border'].filter(k => layer[k]).map(k => `${k} ${layer[k].nLines.toLocaleString()}`);
+  if (ringLayers) parts.push(`rings @ ${ringCenter[1].toFixed(1)}°, ${ringCenter[0].toFixed(1)}° (click to move)`);
   status.textContent = `detail ${detail}` + (parts.length ? ' · ' + parts.join(' · ') : '');
 }
 async function draw(kind){           // (re)load one layer at the current detail
@@ -101,6 +102,42 @@ document.getElementById('grat').onclick = (e) => {
   gratLayer = orb.graticule();
   e.target.classList.add('on');
 };
+
+// smallCircleLines(): click-to-place range rings. Three distance circles around
+// a center (default London), concatenated into one lines() layer + a points()
+// dot at the center. Click the globe to move them (composition surface:
+// on('click') gives the lng/lat under the cursor).
+const RING_KM = [2500, 5000, 7500];
+const kmToDeg = (km) => (km / 6371) * 180 / Math.PI;    // Earth mean radius
+let ringLayers = null, ringCenter = [-0.13, 51.5];      // London
+function drawRings(){
+  if (ringLayers) ringLayers.forEach(l => l.remove());
+  const xyz = [], starts = [0];
+  for (const km of RING_KM) {
+    xyz.push(...smallCircleLines({ center: ringCenter, radius: kmToDeg(km) }).xyz);
+    starts.push(xyz.length / 3);
+  }
+  ringLayers = [
+    orb.lines({ xyz: new Float32Array(xyz), starts: new Uint32Array(starts), color: '#0a84ff', width: 1.6 }),
+    orb.points({ lnglat: new Float32Array(ringCenter), color: '#0a84ff', size: 4 }),
+  ];
+  report();
+}
+document.getElementById('rings').onclick = (e) => {
+  if (ringLayers) { ringLayers.forEach(l => l.remove()); ringLayers = null; e.target.classList.remove('on'); report(); return; }
+  e.target.classList.add('on');
+  drawRings();
+};
+// Recenter on click — but not on drag-release: DOM click fires after a drag too,
+// so require the pointer to have stayed put (<4 px) between down and up.
+let downAt = null;
+orb.canvas.addEventListener('pointerdown', (e) => { downAt = [e.offsetX, e.offsetY]; });
+orb.on('click', (e) => {
+  if (!ringLayers || e.lng == null) return;
+  if (downAt && Math.hypot(e.x - downAt[0], e.y - downAt[1]) > 4) return;
+  ringCenter = [e.lng, e.lat];
+  drawRings();
+});
 
 let cityLayer = null;
 document.getElementById('cities').onclick = (e) => {
