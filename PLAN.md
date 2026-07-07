@@ -268,6 +268,9 @@ substrate from M2.
 ## 7. Decisions log
 
 - **Standalone repo** at `/Users/aj/work/ajglobe`; name `ajglobe`. MIT.
+  **npm name: `ajglobe` too** (decided 2026-07-06) — unscoped, confirmed free on
+  the registry; distinctive, no globe.gl/globus confusion, zero migration cost.
+  Runners-up if it's ever reconsidered: `orbgl`, `sph3` (both free as of today).
 - **WebGL2**, **zero runtime deps**, vanilla ESM, no dev build step; `esbuild`
   only to emit `dist/` later. JS + JSDoc (no TS toolchain).
 - Math vendored (no gl-matrix).
@@ -425,4 +428,3 @@ substrate from M2.
 - Reference assets: which Natural Earth resolution (110m default, 50m option?) for
   coastlines AND admin-0 country borders, and the build step to convert them to the
   vendored binary `pos/idx` layout.
-- Eventual npm package name / scope.
