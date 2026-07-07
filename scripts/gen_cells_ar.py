@@ -21,7 +21,9 @@ import numpy as np
 import skar
 
 # ----- knobs --------------------------------------------------------------
-NAMES = [f'mu3_r{n}' for n in range(7)]   # each must match a gen_*_geom.py output stem
+# every stem the checked-in examples consume (dggs-compare: h3; mu3-ar: mu3) —
+# a from-scratch regeneration should produce all of them, not just the last run
+NAMES = ['h3_r1', 'h3_r2'] + [f'mu3_r{n}' for n in range(7)]
 OUT = Path.home() / 'work' / 'ajglobe' / 'examples' / 'data'
 GAP_TOL = 1e-6
 # --------------------------------------------------------------------------

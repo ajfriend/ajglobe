@@ -190,8 +190,9 @@ substrate from M2.
         straight alpha over the depth sphere (cells don't overlap → no sorting).
         Verified: faded cell == cell·α + sphere·(1−α).
   - [x] large-cell fill subdivision (§8) — fan triangles whose apex-spoke angle
-        trips a gate (>0.06 rad) are subdivided and the new verts projected onto
-        the sphere, so coarse cells stay above the depth sphere. r5/r6 keep the
+        trips a gate (half subdivideTri's split threshold, so one constant owns
+        the policy) are subdivided and the new verts projected onto the sphere,
+        so coarse cells stay above the depth sphere. r5/r6 keep the
         flat fast path untouched (build still ~382 ms / 7.06M verts). Verified on
         ivea7h r2 (492 cells → 14,676 verts, full coverage, no sag holes).
         Reworked 2026-07-06: the uniform per-triangle lattice left T-junction

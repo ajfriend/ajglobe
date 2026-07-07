@@ -39,21 +39,12 @@
 
 <script type="module">
 import { Orb } from '../src/orb.js';
+import { viridis, bin, finiteRange } from './common.js';
 
 const orb = new Orb(document.getElementById('c'), { background:'#ffffff', sphere:'#e0e6ed' });
 window.orb = orb;   // console / bench access (PLAN §8)
 const status = document.getElementById('status');
 const hud = document.getElementById('hud');
-
-// viridis via 8 control stops (no d3) — same as the other DGGS examples.
-const STOPS = [[68,1,84],[71,44,122],[59,81,139],[44,113,142],
-               [33,144,141],[39,173,129],[92,200,99],[253,231,37]];
-function viridis(t){
-  t = Math.max(0, Math.min(1, t)) * (STOPS.length - 1);
-  const i = Math.min(STOPS.length - 2, t | 0), f = t - i, a = STOPS[i], b = STOPS[i+1];
-  return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f, 255];
-}
-async function bin(name, Ctor){ const b = await fetch(`data/${name}`).then(r=>{if(!r.ok)throw new Error(name+' '+r.status);return r.arrayBuffer();}); return new Ctor(b); }
 
 // ---- mu3 cell id from (res, index) — no ids.json needed. -------------------
 // cells_at_res enumerates (base 0..11) × digit tuples over {0..6} in lex order,
@@ -95,7 +86,7 @@ const loadRes = (res) => {
   return cache.get(res);
 };
 
-let layer = null, cur = { res: 2, ar: null };
+let layer = null, cur;
 let epoch = 0;                                       // ignore stale async switches
 async function show(res){
   const e = ++epoch;
@@ -105,11 +96,7 @@ async function show(res){
   catch (err) { status.textContent = `r${res}: ${err.message} — regenerate examples/data (see scripts/)`; return; }
   if (e !== epoch) return;
 
-  let min = Infinity, max = -Infinity;
-  for (const a of ar) if (Number.isFinite(a)) { if (a < min) min = a; if (a > max) max = a; }
-  // a near-zero span is float noise (r0: 12 congruent pentagons, all AR 1.0) —
-  // don't amplify it into fake color variation; draw everything at t=0 instead.
-  const span = max - min > 1e-4 ? max - min : Infinity;
+  const { min, max, span } = finiteRange(ar);
 
   if (layer) layer.remove();
   const t0 = performance.now();
@@ -137,7 +124,7 @@ orb.on('hover', (e) => {
 orb.canvas.focus();
 document.getElementById('bar').addEventListener('click', () => orb.canvas.focus());
 
-orb.borders({ color: '#1a1a1a', width: 1.2, lift: 1.0035 });   // context outlines (CDN, stitched)
+orb.borders({ color: '#1a1a1a', width: 1.2 });   // context outlines (CDN, stitched)
 orb.lookAt(10, 25);
 show(2);
 </script>

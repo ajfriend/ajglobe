@@ -291,6 +291,11 @@ function uvSphere(r, slices = 64, stacks = 32) {
 // ≈ 0.99865 > depth sphere 0.998. Internal; exported for the unit tests.
 const MAX_FILL_EDGE = 0.09;                       // rad
 const COS_FILL_EDGE = Math.cos(MAX_FILL_EDGE);
+// polygons()'s fast-path gate, derived from the same constant: fan-triangle
+// edges are two apex spokes plus a ring edge bounded by their sum, so spokes
+// under MAX_FILL_EDGE/2 keep every edge below the split threshold — the flat
+// fast path then emits exactly what subdivideTri would.
+const COS_SPOKE_GATE = Math.cos(MAX_FILL_EDGE / 2);
 export function subdivideTri(P, F, I, fid, ia, ib, ic) {
   const dot = (i, j) => P[i * 3] * P[j * 3] + P[i * 3 + 1] * P[j * 3 + 1] + P[i * 3 + 2] * P[j * 3 + 2];
   const mid = (i, j) => {                         // spherical midpoint of two unit vectors
@@ -526,11 +531,10 @@ export class Orb {
     // of a cell's fan share its id, so the fragment shader reads it 'flat'.
     //
     // The same pass flags any cell coarse enough that flat fan triangles would
-    // chord below the depth sphere (radius 0.998) and get occluded (§8). Gate on
-    // the apex-spoke angle: a ring edge is <= 2x a spoke, so spoke < 0.06 rad
-    // keeps every fan edge < 0.12 rad (chord sag < 0.002). r5/r6 cells (~1°) never
+    // chord below the depth sphere (radius 0.998) and get occluded (§8). The
+    // apex-spoke gate is derived from subdivideTri's split threshold (see
+    // COS_SPOKE_GATE) so one constant owns the policy; r5/r6 cells (~1°) never
     // trip it, so their fast path stays as-is.
-    const COS_GATE = Math.cos(0.06);
     let fids = new Uint32Array(nVerts);
     let triCount = 0, anyLarge = false;
     for (let c = 0; c < nCells; c++) {
@@ -538,7 +542,7 @@ export class Orb {
       const ax = pos[s * 3], ay = pos[s * 3 + 1], az = pos[s * 3 + 2];
       for (let v = s; v < e; v++) {
         fids[v] = c;
-        if (ax * pos[v * 3] + ay * pos[v * 3 + 1] + az * pos[v * 3 + 2] < COS_GATE) anyLarge = true;
+        if (ax * pos[v * 3] + ay * pos[v * 3 + 1] + az * pos[v * 3 + 2] < COS_SPOKE_GATE) anyLarge = true;
       }
       if (k >= 3) triCount += k - 2;
     }
@@ -609,10 +613,9 @@ export class Orb {
   //                  more depth separation from fills (less z-fighting toward the
   //                  limb), at the cost of the stroke visibly floating off the
   //                  surface near the limb. ~1.003–1.004 is a good high-contrast range.
-  lines({ xyz, lnglat, starts, color = '#ffffff', width = 1.5, lift = 1.0015 }) {
+  lines({ xyz, lnglat, starts, color = '#ffffff', width = 1.5, lift: R = 1.0015 }) {
     const gl = this.gl;
     const nLines = starts.length - 1;
-    const R = lift;                              // lift above the fills
     const MAX_SEG = 0.05;                         // rad; densify long edges into arcs
     const vec = (i) => this._posAt(xyz, lnglat, i);
 
@@ -726,8 +729,11 @@ export class Orb {
   // Batteries-included reference geometry (Natural Earth), fetched from a CDN and
   // drawn via lines() — the library bundles no data. detail: '110m' | '50m' | '10m'.
   // baseUrl overrides the default CDN (e.g. self-hosted GeoJSON). Returns the layer.
+  // Reference lines usually ride over polygon fills, so they default to a higher
+  // lift than raw lines(): extra depth separation kills fill z-fighting toward the
+  // limb, and is invisible over a bare sphere.
   async coastlines(opts = {}) {
-    return this._neLines({ file: 'coastline', color: '#000000', width: 1.5, stitch: false, ...opts });
+    return this._neLines({ file: 'coastline', color: '#000000', width: 1.5, stitch: false, lift: 1.0035, ...opts });
   }
   // Full country outlines (admin-0 country polygons → ring polylines), so borders
   // read as complete shapes on their own (coast included), not just inter-country
@@ -735,7 +741,7 @@ export class Orb {
   // Stitched by default (un-cuts the antimeridian/polar splits); `stitch:false` to
   // skip, or `stitch: geoStitch` to inject your own (offline / no CDN).
   async borders(opts = {}) {
-    return this._neLines({ file: 'admin_0_countries', color: '#c2185b', width: 1.2, stitch: true, ...opts });
+    return this._neLines({ file: 'admin_0_countries', color: '#c2185b', width: 1.2, stitch: true, lift: 1.0035, ...opts });
   }
 
   async _neLines({ file, detail = '50m', color, width, baseUrl, stitch, lift }) {

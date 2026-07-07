@@ -4,10 +4,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { subdivideTri } from '../src/orb.js';
-import { lnglatToVec3 } from '../src/glmath.js';
+import { lnglatToVec3, vec3 } from '../src/glmath.js';
 
-// Run subdivideTri over a list of triangles given as lng/lat corner triples.
-// Returns {P, F, I} plus the vertex count per input triangle.
+// Run subdivideTri over a list of triangles given as lng/lat corner triples;
+// returns the {P, F, I} arrays it filled.
 function subdivide(tris) {
   const P = [], F = [], I = [];
   for (let k = 0; k < tris.length; k++) {
@@ -21,19 +21,15 @@ function subdivide(tris) {
 }
 
 // All boundary points a triangle contributes along the edge between unit
-// vectors u and v (points on that great circle, keyed to kill float noise).
+// vectors u and v (points on that great-circle arc, keyed to kill float noise).
 function edgePoints(P, I, u, v) {
+  const n = vec3.cross(u, v), nl = vec3.len(n), uv = vec3.dot(u, v);
   const keys = new Set();
-  const onEdge = (x, y, z) => {
-    const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
-    const nl = Math.hypot(...n);
-    if (Math.abs((x * n[0] + y * n[1] + z * n[2]) / nl) > 1e-9) return false;   // on the great circle
-    const du = x * u[0] + y * u[1] + z * u[2], dv = x * v[0] + y * v[1] + z * v[2];
-    return du > u[0] * v[0] + u[1] * v[1] + u[2] * v[2] - 1e-9 && dv > -1;      // between u and v
-  };
   for (const i of I) {
-    const x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
-    if (onEdge(x, y, z)) keys.add(`${x.toFixed(12)},${y.toFixed(12)},${z.toFixed(12)}`);
+    const p = [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]];
+    if (Math.abs(vec3.dot(p, n) / nl) > 1e-9) continue;                  // on the great circle
+    if (vec3.dot(p, u) < uv - 1e-9 || vec3.dot(p, v) < uv - 1e-9) continue;  // between u and v
+    keys.add(p.map((x) => x.toFixed(12)).join(','));
   }
   return keys;
 }

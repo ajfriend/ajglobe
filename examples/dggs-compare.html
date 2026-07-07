@@ -32,16 +32,7 @@
 
 <script type="module">
 import { Orb } from '../src/orb.js';
-
-// viridis via 8 control stops (no d3) — same as the dggs-globe example.
-const STOPS = [[68,1,84],[71,44,122],[59,81,139],[44,113,142],
-               [33,144,141],[39,173,129],[92,200,99],[253,231,37]];
-function viridis(t){
-  t = Math.max(0, Math.min(1, t)) * (STOPS.length - 1);
-  const i = Math.min(STOPS.length - 2, t | 0), f = t - i, a = STOPS[i], b = STOPS[i+1];
-  return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f, 255];
-}
-async function bin(name, Ctor){ const b = await fetch(`data/${name}`).then(r=>{if(!r.ok)throw new Error(name+' '+r.status);return r.arrayBuffer();}); return new Ctor(b); }
+import { viridis, bin, finiteRange } from './common.js';
 
 // One H3 globe: load its cell geometry + skar AR + ids, color cells by AR value
 // (linear min→max). Value-based so equal AR ⇒ equal color; percentile ranking would
@@ -54,15 +45,13 @@ async function makeGlobe(canvasId, res){
     bin(`h3_r${res}_ar.f32`, Float32Array),
   ]);
   const ids = await fetch(`data/h3_r${res}_ids.json`).then(r=>r.json());
-  let min = Infinity, max = -Infinity;
-  for(const a of ar) if(Number.isFinite(a)){ if(a<min)min=a; if(a>max)max=a; }
-  const span = max - min || 1;
+  const { min, span } = finiteRange(ar);
   orb.polygons({ lnglat: pos, starts, fill: i => {
     const a = ar[i];
     if(!Number.isFinite(a)) return [120,120,120,255];
     return viridis((a - min) / span);
   }});
-  orb.borders({ color: '#1a1a1a', width: 1.6, lift: 1.0035 });   // Natural Earth country outlines (CDN, stitched); lift clears z-fighting toward the limb
+  orb.borders({ color: '#1a1a1a', width: 1.6 });   // Natural Earth country outlines (CDN, stitched)
   orb.lookAt(10, 25);
   return { orb, res, ar, ids };
 }
