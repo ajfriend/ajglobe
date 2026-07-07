@@ -138,10 +138,12 @@ const STROKE_VS = `#version 300 es
 in vec3 a_pA;
 in vec3 a_pB;
 in vec2 a_param;            // x: end (0=A, 1=B), y: side (-1/+1)
+in float a_len;             // cumulative arc length at this end, radians
 uniform mat4 u_mvp;
 uniform vec2 u_viewport;    // device px
 uniform float u_hw;         // stroke half-width, device px
 out float v_dist;
+out float v_len;
 void main() {
   vec4 ca = u_mvp * vec4(a_pA, 1.0);
   vec4 cb = u_mvp * vec4(a_pB, 1.0);
@@ -156,15 +158,26 @@ void main() {
   gl_Position = clip;
 ${DEPTH_BIAS_GLSL}
   v_dist = a_param.y * w;
+  v_len = a_len;
 }`;
 
+// Dashing: u_dash = (period, on-fraction) with lengths in device px; (0,0) =
+// solid. v_len is WORLD arc length (radians), scaled to px by u_pxPerRad =
+// device px per radian of arc at the globe center — so dashes keep their pixel
+// size while zooming, like SVG dasharray. Measured along the great-circle arc,
+// not the projected path, so dashes compress a little toward the limb
+// (foreshortening); acceptable for annotation strokes.
 const STROKE_FS = `#version 300 es
 precision highp float;
 uniform vec4 u_color;
 uniform float u_hw;
+uniform vec2 u_dash;        // (period px, on-fraction); (0,0) = solid
+uniform float u_pxPerRad;   // device px per radian of arc at globe center
 in float v_dist;
+in float v_len;
 out vec4 o_color;
 void main() {
+  if (u_dash.x > 0.0 && fract(v_len * u_pxPerRad / u_dash.x) > u_dash.y) discard;
   float cov = clamp(u_hw + 0.5 - abs(v_dist), 0.0, 1.0);   // 1px edge feather
   if (cov <= 0.0) discard;
   o_color = vec4(u_color.rgb, u_color.a * cov);
@@ -407,7 +420,7 @@ export class Orb {
     const PROGRAMS = {
       fill:      [FILL_VS, FILL_FS,        ['mvp', 'style', 'styleW', 'hoverId']],
       disk:      [DISK_VS, DISK_FS,        ['mvp', 'color']],
-      stroke:    [STROKE_VS, STROKE_FS,    ['mvp', 'viewport', 'hw', 'color']],
+      stroke:    [STROKE_VS, STROKE_FS,    ['mvp', 'viewport', 'hw', 'color', 'dash', 'pxPerRad']],
       pick:      [FILL_VS, PICK_FS,        ['mvp', 'idBase']],          // same vertex stage as fills
       point:     [POINT_VS, POINT_FS,      ['mvp', 'viewport', 'dppx', 'style', 'styleW', 'hoverId']],
       pointPick: [POINT_VS, POINTPICK_FS,  ['mvp', 'viewport', 'dppx', 'idBase']],   // same vertex stage as points
@@ -433,7 +446,7 @@ export class Orb {
     this._destroyed = false;
     this._abort = new AbortController();
     const signal = this._abort.signal;
-    this.cam = new Camera(canvas, () => { this._invalidate(); this._emit('viewchange'); }, signal);
+    this.cam = new Camera(canvas, () => { this._invalidate(); this._emit('viewchange'); }, signal, opts.interaction);
     this._dirty = true;
     canvas.addEventListener('pointermove', (e) => this._emitPointer('hover', e), { signal });
     // 'click' means "the user clicked a spot", not the raw DOM event: the DOM
@@ -704,14 +717,17 @@ export class Orb {
   //   starts       : Uint32Array polyline start indices (len = nLines + 1)
   //   color        : '#rrggbb' | [r,g,b,a]
   //   width        : stroke width in CSS pixels (default 1.5)
-  lines({ xyz, lnglat, starts, color = '#ffffff', width = 1.5 }) {
+  //   dash         : [onPx, offPx] in CSS px (dash phase restarts per polyline;
+  //                  measured along the arc — see STROKE_FS), or null for solid
+  lines({ xyz, lnglat, starts, color = '#ffffff', width = 1.5, dash = null }) {
     const gl = this.gl;
     const nLines = starts.length - 1;
     const vec = (i) => this._posAt(xyz, lnglat, i);
 
-    // Per segment, 4 verts carrying both endpoints (a_pA, a_pB) + (end, side); the
-    // vertex shader does the screen-space offset, so geometry is view-independent.
-    const PA = [], PB = [], PRM = [], IDX = [];
+    // Per segment, 4 verts carrying both endpoints (a_pA, a_pB) + (end, side) +
+    // the cumulative arc length at that end (for dashing); the vertex shader does
+    // the screen-space offset, so geometry is view-independent.
+    const PA = [], PB = [], PRM = [], LEN = [], IDX = [];
     let base = 0;
     for (let l = 0; l < nLines; l++) {
       const s = starts[l], e = starts[l + 1];
@@ -725,12 +741,16 @@ export class Orb {
         for (let k = 1; k <= n; k++) dense.push(vec3.slerp(prev, cur, k / n));
         prev = cur;
       }
+      let arc = 0;
       for (let i = 0; i + 1 < dense.length; i++) {
         const a = dense[i], b = dense[i + 1];
+        const arcB = arc + vec3.angle(a, b);
         for (let q = 0; q < 4; q++) { PA.push(a[0], a[1], a[2]); PB.push(b[0], b[1], b[2]); }
         PRM.push(0, -1, 0, 1, 1, -1, 1, 1);
+        LEN.push(arc, arc, arcB, arcB);
         IDX.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
         base += 4;
+        arc = arcB;
       }
     }
 
@@ -739,12 +759,13 @@ export class Orb {
     const pa = this._attrib(this.strokeProg, 'a_pA', new Float32Array(PA), 3);
     const pb = this._attrib(this.strokeProg, 'a_pB', new Float32Array(PB), 3);
     const pm = this._attrib(this.strokeProg, 'a_param', new Float32Array(PRM), 2);
+    const pl = this._attrib(this.strokeProg, 'a_len', new Float32Array(LEN), 1);
     const ib = this._elements(new Uint32Array(IDX));
     gl.bindVertexArray(null);
 
     const layer = {
       vao, count: IDX.length, nLines, width,
-      color: rgbaF(color), _buffers: [pa, pb, pm, ib],
+      color: rgbaF(color), dash, _buffers: [pa, pb, pm, pl, ib],
     };
     layer.remove = () => {
       this.lineLayers = this.lineLayers.filter((x) => x !== layer);
@@ -951,10 +972,16 @@ export class Orb {
       gl.useProgram(this.strokeProg);
       gl.uniformMatrix4fv(this.strokeU.mvp, false, mvp);
       gl.uniform2f(this.strokeU.viewport, w, h);
+      // device px per radian of arc at the globe center: globe pixel radius
+      // (ortho half-extent is 1.05/zoom world units over h/2 device px)
+      gl.uniform1f(this.strokeU.pxPerRad, (h / 2) * this.cam.zoom / 1.05);
       gl.depthMask(false);
       for (const l of this.lineLayers) {
         gl.uniform4f(this.strokeU.color, l.color[0], l.color[1], l.color[2], l.color[3]);
         gl.uniform1f(this.strokeU.hw, l.width * dppx * 0.5);
+        const d = l.dash;
+        if (d) gl.uniform2f(this.strokeU.dash, (d[0] + d[1]) * dppx, d[0] / (d[0] + d[1]));
+        else gl.uniform2f(this.strokeU.dash, 0, 0);
         gl.bindVertexArray(l.vao);
         gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
       }
