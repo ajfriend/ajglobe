@@ -529,11 +529,21 @@ export class Orb {
       : lnglatToVec3(lnglat[i * 2], lnglat[i * 2 + 1]);
   }
 
-  // Pack one RGBA8 texel per feature from the fill fn, row-major in W×H bytes.
-  _buildStyle(n, W, H, fillFn) {
-    const data = new Uint8Array(W * H * 4);
+  // Pack one RGBA8 texel per feature from the fill value, row-major into `data`
+  // (retained by _makeStyle and rewritten in place on restyle — no per-restyle
+  // allocation at DGGS scale). A constant color parses once and block-fills;
+  // only a per-feature fn pays the n× call + parse cost.
+  _buildStyle(n, data, fill) {
+    if (typeof fill !== 'function') {
+      const col = hexRGBA(fill);
+      for (let c = 0; c < n; c++) {
+        data[c * 4] = col[0]; data[c * 4 + 1] = col[1];
+        data[c * 4 + 2] = col[2]; data[c * 4 + 3] = col[3];
+      }
+      return data;
+    }
     for (let c = 0; c < n; c++) {
-      const col = hexRGBA(fillFn(c));
+      const col = hexRGBA(fill(c));
       data[c * 4] = col[0]; data[c * 4 + 1] = col[1];
       data[c * 4 + 2] = col[2]; data[c * 4 + 3] = col[3];
     }
@@ -562,11 +572,12 @@ export class Orb {
     const W = Math.min(maxTex, 4096);
     const H = Math.max(1, Math.ceil(n / W));
     if (H > maxTex) throw new Error(`too many features for one style texture: ${n}`);
-    const tex = this._styleTexture(W, H, this._buildStyle(n, W, H, asFn(colorFn)));
+    const data = new Uint8Array(W * H * 4);      // retained; rewritten in place on restyle
+    const tex = this._styleTexture(W, H, this._buildStyle(n, data, colorFn));
     const restyle = (f) => {
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE,
-        this._buildStyle(n, W, H, asFn(f)));
+        this._buildStyle(n, data, f));
       this._dirty = true;
     };
     return { tex, W, H, restyle };

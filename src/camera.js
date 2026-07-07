@@ -146,15 +146,29 @@ export class Camera {
   }
 
   // Both frame matrices, sharing one vp computation (the render passes need the
-  // pair: vp for the depth disk, mvp for everything that rotates).
+  // pair: vp for the depth disk, mvp for everything that rotates). Cached per
+  // (orientation, zoom, aspect): this.q is REPLACED — never mutated in place —
+  // on every view change, so reference identity keys the cache; the inverse is
+  // computed lazily by unproject and rides along. Matters for label overlays
+  // calling project()/unproject() per feature per frame: one matrix build
+  // instead of N.
   matrices(aspect) {
+    const c = this._mats;
+    if (c && c.q === this.q && c.zoom === this.zoom && c.aspect === aspect) return c;
     const vp = this.vp(aspect);
-    return { vp, mvp: mat4.multiply(vp, mat4.fromQuat(this.q)) };
+    return (this._mats = {
+      q: this.q, zoom: this.zoom, aspect,
+      vp, mvp: mat4.multiply(vp, mat4.fromQuat(this.q)), inv: undefined,
+    });
   }
 
   mvp(aspect) {
     return this.matrices(aspect).mvp;
   }
+
+  // CSS px <-> NDC. One place owns the convention (y flips between the spaces).
+  _pxToNdc(px, py, r) { return [(px / r.width) * 2 - 1, 1 - (py / r.height) * 2]; }
+  _ndcToPx(nx, ny, r) { return { x: (nx * 0.5 + 0.5) * r.width, y: (1 - (ny * 0.5 + 0.5)) * r.height }; }
 
   // Geographic point -> canvas CSS pixels. visible=false when the point is on
   // the far (back) hemisphere, behind the globe from the viewer.
@@ -163,8 +177,7 @@ export class Camera {
     const r = this.canvas.getBoundingClientRect();
     const clip = mat4.mulVec4(this.mvp(r.width / r.height), [p[0], p[1], p[2], 1]);
     return {
-      x: (clip[0] / clip[3] * 0.5 + 0.5) * r.width,
-      y: (1 - (clip[1] / clip[3] * 0.5 + 0.5)) * r.height,
+      ...this._ndcToPx(clip[0] / clip[3], clip[1] / clip[3], r),
       // Front hemisphere = the model-rotated point faces the +z viewer.
       visible: quat.rotateVec3(this.q, p)[2] > 0,
     };
@@ -176,9 +189,10 @@ export class Camera {
   // sphere there and read lng/lat off the hit directly (no extra un-rotation).
   unproject(px, py) {
     const r = this.canvas.getBoundingClientRect();
-    const inv = mat4.invert(this.mvp(r.width / r.height));
+    const m = this.matrices(r.width / r.height);
+    const inv = m.inv !== undefined ? m.inv : (m.inv = mat4.invert(m.mvp));
     if (!inv) return null;
-    const nx = (px / r.width) * 2 - 1, ny = 1 - (py / r.height) * 2;
+    const [nx, ny] = this._pxToNdc(px, py, r);
     const at = (z) => { const v = mat4.mulVec4(inv, [nx, ny, z, 1]); return [v[0] / v[3], v[1] / v[3], v[2] / v[3]]; };
     const a = at(-1), d = vec3.sub(at(1), a);            // ray a + t d (object space)
     const A = vec3.dot(d, d), B = 2 * vec3.dot(a, d), C = vec3.dot(a, a) - 1;
