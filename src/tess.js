@@ -44,13 +44,29 @@ export const MAX_FILL_EDGE = 0.09;
 export const HEMI_MARGIN = 0.02;   // exported for the unit tests
 
 // ---- shared ear-clip skeleton ----------------------------------------------
-// orient(a,b,c): >0 for a CCW corner; inTri(p,a,b,c): p inside CCW triangle.
-// Clips a simple CCW index cycle into triangles appended to out. Bridged
-// cycles contain duplicate indices; the by-value skip handles them, and the
-// zero-area corners bridges create are skipped as non-convex until the
-// fallback clears them.
-function earClip(orient, inTri, cycle, out) {
-  const idx = cycle.slice();
+// orient(a,b,c): >0 for a CCW corner; inTri(p,a,b,c): p inside CCW triangle;
+// samePos(i,j): vertices i and j are position-identical. Clips a simple CCW
+// index cycle into triangles appended to out. Bridged cycles contain duplicate
+// indices AND position-duplicates (rings that touch at a vertex — cell unions
+// produce these — plus zero-length bridges): the ear scan must skip a vertex
+// that merely COINCIDES with an ear corner (it lies on the boundary, never
+// strictly inside), or every ear touching the shared vertex is falsely
+// blocked and the fallback emits garbage. Zero-area corners the bridges
+// create are skipped as non-convex until the fallback clears them.
+function earClip(orient, inTri, samePos, cycle, out) {
+  // Collapse consecutive position-duplicates. A hole touching the outer ring
+  // bridges with a ZERO-LENGTH bridge, leaving runs like …A,A,…,A,A,… whose
+  // corners all have zero orientation — every real ear then looks degenerate
+  // and only the fallback can act. Removing the run (keeping one visit per
+  // run — the pinch still visits the shared position twice, non-adjacently)
+  // restores a clippable cycle; it also neutralizes repeated consecutive
+  // points in sloppy input rings.
+  const idx = [];
+  for (const v of cycle) {
+    if (idx.length && samePos(v, idx[idx.length - 1])) continue;
+    idx.push(v);
+  }
+  while (idx.length > 1 && samePos(idx[0], idx[idx.length - 1])) idx.pop();
   let guard = idx.length * idx.length + 10;
   while (idx.length > 3 && guard-- > 0) {
     let clipped = false;
@@ -60,6 +76,7 @@ function earClip(orient, inTri, cycle, out) {
       let ear = true;
       for (const p of idx) {                              // any other vertex inside?
         if (p === a || p === b || p === c) continue;
+        if (samePos(p, a) || samePos(p, b) || samePos(p, c)) continue;
         if (inTri(p, a, b, c)) { ear = false; break; }
       }
       if (!ear) continue;
@@ -181,36 +198,30 @@ function triangulateGnomonic(P, rings, center, out) {
   for (const h of holes) outer = bridgeHole2(pts, outer, h);
 
   const tris = [];
-  earClip((a, b, c) => cross2(pts, a, b, c), (p, a, b, c) => pointInTri2(pts, p, a, b, c), outer, tris);
+  earClip(
+    (a, b, c) => cross2(pts, a, b, c),
+    (p, a, b, c) => pointInTri2(pts, p, a, b, c),
+    (i, j) => pts[i * 2] === pts[j * 2] && pts[i * 2 + 1] === pts[j * 2 + 1],
+    outer, tris,
+  );
   for (const t of tris) out.push(src[t]);
   return out;
 }
 
-// Complement of a single loop ("sphere minus this loop"; the ring arrives CW
-// around its small side, i.e. CCW around the region): fan from the antipode of
-// the cap center — the complement is star-shaped from there for cap-scale
-// loops — and let the caller's subdivision cope with the huge triangles.
-// Appends the antipode to P; callers own the parallel arrays.
-function complementFan(P, [s, e], center, out) {
-  const si = P.length / 3;
-  P.push(-center[0], -center[1], -center[2]);
-  for (let v = s; v < e; v++) out.push(si, v, v === e - 1 ? s : v + 1);
-  return out;
-}
-
-// Complement WITH holes ("sphere minus all these loops", every ring CW around
-// its own small side): no single fan works (the far side is fine, but the
-// loops punch holes in it), and ear clipping can't start on the loop
-// boundaries (every corner is reflex from the region's side). Instead, split
-// the sphere at a circle midway between the loops' bounding cap and the
-// hemisphere limit:
+// Complement region ("sphere minus these loops", every ring CW around its own
+// small side; one or more loops). Ear clipping can't start on the loop
+// boundaries (every corner is reflex from the region's side — spheres aren't
+// bound by the planar two-ears theorem), and a plain fan from the antipode is
+// only valid for loops whose complement is star-shaped from there, which
+// concave loops are not. Instead, split the sphere at a circle midway between
+// the loops' bounding cap and the hemisphere limit:
 //   - far side: a pure spherical cap around the antipode — fan, no holes;
 //   - near side: an ordinary hemisphere-fitting polygon — the split circle as
 //     its CCW outer ring, the given loops as its holes — the gnomonic path.
 // Both sides index the SAME split-ring vertices, so the caller's subdivision
 // splits the shared edges identically and the seam stays crack-free (the
 // subdivideTri shared-edge argument).
-function complementWithHoles(P, rings, center, worst, out) {
+function complementRegion(P, rings, center, worst, out) {
   const th = (Math.acos(worst) + Math.PI / 2) / 2;      // split-circle radius
   const q = quat.fromUnitVectors([0, 0, 1], center);
   // sample at the fill-edge budget so subdivideTri won't re-split ring edges
@@ -294,6 +305,7 @@ function triangulateSpherical(P, rings, out) {
   earClip(
     (a, b, c) => det3(P, a, b, c),
     (p, a, b, c) => det3(P, a, b, p) >= 0 && det3(P, b, c, p) >= 0 && det3(P, c, a, p) >= 0,
+    (i, j) => P[i * 3] === P[j * 3] && P[i * 3 + 1] === P[j * 3 + 1] && P[i * 3 + 2] === P[j * 3 + 2],
     outer, out,
   );
   return out;
@@ -358,11 +370,32 @@ function ringCCW(P, ring, center) {
 // sphere only lets you obey it"). Sloppily wound planar exports are the data
 // layer's problem, by design.
 export function triangulatePolygon(P, rings, out = []) {
+  // a ring needs 3 vertices to bound anything; drop degenerates rather than
+  // guessing (a 2-point ring has signed area 0 and would otherwise be
+  // misread as a complement covering the whole sphere)
+  rings = rings.filter(([s, e]) => e - s >= 3);
+  if (!rings.length) return out;
   const { c, worst } = capCenter(P, rings);
-  // vertices don't fit an open hemisphere (HEMI_MARGIN): spherical predicates
-  if (worst <= HEMI_MARGIN) return triangulateSpherical(P, rings, out);
+  if (worst <= HEMI_MARGIN) {
+    // Vertices don't fit an open hemisphere: spherical predicates. One shape
+    // this path cannot do: a complement region whose small loops are scattered
+    // too widely for the cap-ring split (e.g. two CW loops near-antipodal) —
+    // every boundary corner is reflex, no ear ever clips, and the fallback
+    // emits inverted triangles. Genuinely over-hemisphere OUTLINES (wiggly
+    // boundaries like the blog's 'cross') clip fine, so detect the failure by
+    // its signature — flipped output — rather than pre-guessing from shape,
+    // and fail loudly instead of rendering garbage.
+    const n0 = out.length;
+    triangulateSpherical(P, rings, out);
+    for (let t = n0; t < out.length; t += 3) {
+      if (det3(P, out[t], out[t + 1], out[t + 2]) < -1e-9) {
+        console.warn('ajglobe: unsupported spherical polygon (likely a complement with loops spanning more than a hemisphere); skipping');
+        out.length = n0;
+        break;
+      }
+    }
+    return out;
+  }
   if (ringCCW(P, rings[0], c)) return triangulateGnomonic(P, rings, c, out);
-  return rings.length === 1
-    ? complementFan(P, rings[0], c, out)
-    : complementWithHoles(P, rings, c, worst, out);
+  return complementRegion(P, rings, c, worst, out);
 }

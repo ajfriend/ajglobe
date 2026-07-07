@@ -69,13 +69,12 @@ function runPoly(coords, label) {
     }, 0);
 
   const n = rings[rings.length - 1][1] - rings[0][0];
-  const complementSingle = rings.length === 1 && outerA > 2 * Math.PI;
   const { worst } = capCenter(P, rings);
-  const complementHoles = worst > HEMI_MARGIN && rings.length > 1 && outerA > 2 * Math.PI;
-  // complement-with-holes adds a synthetic split ring, so only bound the count
-  if (complementHoles) assert.ok(tris.length / 3 > n, `${label}: triangle count`);
-  else assert.equal(tris.length / 3, complementSingle ? n : n + 2 * (rings.length - 1) - 2,
-    `${label}: triangle count`);
+  // hemisphere-fitting complements go through the cap-ring split, which adds a
+  // synthetic split ring + fan — only bound their count; everything else is exact
+  const complement = worst > HEMI_MARGIN && outerA > 2 * Math.PI;
+  if (complement) assert.ok(tris.length / 3 > n, `${label}: triangle count`);
+  else assert.equal(tris.length / 3, n + 2 * (rings.length - 1) - 2, `${label}: triangle count`);
 
   let sum = 0;
   for (let t = 0; t < tris.length; t += 3) {
