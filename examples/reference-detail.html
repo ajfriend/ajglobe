@@ -103,22 +103,17 @@ document.getElementById('grat').onclick = (e) => {
   e.target.classList.add('on');
 };
 
-// smallCircleLines(): click-to-place range rings. Three distance circles around
-// a center (default London), concatenated into one lines() layer + a points()
-// dot at the center. Click the globe to move them (composition surface:
-// on('click') gives the lng/lat under the cursor).
+// smallCircleLines(): click-to-place range rings. A three-distance ring set is
+// one generator call → one lines() layer, plus a points() dot at the center.
+// Click the globe to move them (composition surface: on('click') gives the
+// lng/lat under the cursor; the library already swallows drag-release clicks).
 const RING_KM = [2500, 5000, 7500];
 const kmToDeg = (km) => (km / 6371) * 180 / Math.PI;    // Earth mean radius
 let ringLayers = null, ringCenter = [-0.13, 51.5];      // London
 function drawRings(){
   if (ringLayers) ringLayers.forEach(l => l.remove());
-  const xyz = [], starts = [0];
-  for (const km of RING_KM) {
-    xyz.push(...smallCircleLines({ center: ringCenter, radius: kmToDeg(km) }).xyz);
-    starts.push(xyz.length / 3);
-  }
   ringLayers = [
-    orb.lines({ xyz: new Float32Array(xyz), starts: new Uint32Array(starts), color: '#0a84ff', width: 1.6 }),
+    orb.lines({ ...smallCircleLines({ center: ringCenter, radius: RING_KM.map(kmToDeg) }), color: '#0a84ff', width: 1.6 }),
     orb.points({ lnglat: new Float32Array(ringCenter), color: '#0a84ff', size: 4 }),
   ];
   report();
@@ -128,13 +123,8 @@ document.getElementById('rings').onclick = (e) => {
   e.target.classList.add('on');
   drawRings();
 };
-// Recenter on click — but not on drag-release: DOM click fires after a drag too,
-// so require the pointer to have stayed put (<4 px) between down and up.
-let downAt = null;
-orb.canvas.addEventListener('pointerdown', (e) => { downAt = [e.offsetX, e.offsetY]; });
 orb.on('click', (e) => {
   if (!ringLayers || e.lng == null) return;
-  if (downAt && Math.hypot(e.x - downAt[0], e.y - downAt[1]) > 4) return;
   ringCenter = [e.lng, e.lat];
   drawRings();
 });

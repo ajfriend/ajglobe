@@ -12,7 +12,7 @@
 // texels, never the geometry. The same featureId drives GPU picking. Three
 // primitives — polygons (fills), lines (thick AA strokes), points (disc markers).
 
-import { lnglatToVec3, lnglatToVec3Into, vec3 } from './glmath.js';
+import { lnglatToVec3, lnglatToVec3Into, vec3, quat } from './glmath.js';
 
 // Re-export the pure view converters so consumers get them from the package entry
 // alongside Orb (the core view format is { q, zoom }; these translate the rotation
@@ -262,40 +262,42 @@ export function geojsonLines(gj) {
   return { lnglat: new Float32Array(lng), starts: new Uint32Array(starts) };
 }
 
-// One closed small circle — every point at angular `radius` (degrees) from
-// `center` [lng, lat] — as { xyz, starts } for lines(). Coordinate-free:
-// p(t) = cosθ·n + sinθ·(u·cos t + v·sin t) on an orthonormal frame around the
-// center axis — no lng/lat parameterization, so no antimeridian/pole seam.
-// A small circle is NOT a geodesic, and lines() draws geodesic chords between
-// anchors, so fidelity comes from the sampling step: Δt = MAX_SEG/√sinθ keeps
-// the chords' deviation from the circle within MAX_SEG²/8 — the geodesic
-// densifier's own chord budget. One fidelity constant owns every curve, and at
-// θ = 90° (a great circle) this converges to the geodesic policy exactly.
+// Closed small circles around a shared center — every point at angular radius
+// (degrees) from `center` [lng, lat] — as { xyz, starts } for lines().
+// radius: number | number[], one ring per entry, so a range-ring set is one
+// call (and one layer). Coordinate-free: rings are sampled in the canonical
+// pole frame and rotated onto the center axis (quat.fromUnitVectors owns the
+// degenerate antiparallel case) — no lng/lat parameterization, so no
+// antimeridian/pole seam. A small circle is NOT a geodesic, and lines() draws
+// geodesic chords between anchors, so fidelity comes from the sampling step:
+// Δt = MAX_SEG/√sinθ keeps the chords' deviation from the circle within
+// MAX_SEG²/8 — the geodesic densifier's own chord budget. One fidelity
+// constant owns every curve; at θ = 90° (a great circle) this converges to
+// the geodesic policy exactly.
 export function smallCircleLines({ center, radius }) {
-  const th = radius * Math.PI / 180;
-  const n = lnglatToVec3(center[0], center[1]);
-  let u = vec3.cross(n, [0, 0, 1]);
-  if (vec3.len(u) < 1e-6) u = [1, 0, 0];        // polar axis: start on the equator plane
-  u = vec3.norm(u);
-  const v = vec3.cross(n, u);
-  const ct = Math.cos(th), st = Math.sin(th);
-  const segs = Math.max(8, Math.ceil((2 * Math.PI) * Math.sqrt(Math.max(st, 0)) / MAX_SEG));
-  const xyz = new Float32Array((segs + 1) * 3);
-  for (let i = 0; i < segs; i++) {
-    const t = (i / segs) * 2 * Math.PI, c = Math.cos(t), s = Math.sin(t);
-    for (let k = 0; k < 3; k++) xyz[i * 3 + k] = ct * n[k] + st * (c * u[k] + s * v[k]);
+  const q = quat.fromUnitVectors([0, 0, 1], lnglatToVec3(center[0], center[1]));
+  const xyz = [], starts = [0];
+  for (const deg of Array.isArray(radius) ? radius : [radius]) {
+    const th = deg * Math.PI / 180, ct = Math.cos(th), st = Math.sin(th);
+    const segs = Math.max(8, Math.ceil((2 * Math.PI) * Math.sqrt(st) / MAX_SEG));
+    const ring0 = xyz.length;
+    for (let i = 0; i < segs; i++) {
+      const t = (i / segs) * 2 * Math.PI;
+      xyz.push(...quat.rotateVec3(q, [st * Math.cos(t), st * Math.sin(t), ct]));
+    }
+    xyz.push(xyz[ring0], xyz[ring0 + 1], xyz[ring0 + 2]);   // close the ring bitwise
+    starts.push(xyz.length / 3);
   }
-  xyz.copyWithin(segs * 3, 0, 3);               // close the ring bitwise
-  return { xyz, starts: new Uint32Array([0, segs + 1]) };
+  return { xyz: new Float32Array(xyz), starts: new Uint32Array(starts) };
 }
 
 // Graticule polylines (meridians + parallels) as { xyz, starts }, ready for
 // lines(). Pure geometry, no data. Meridians are geodesics, so each is just
 // its two endpoints — lines() densifies them like any segment; parallels are
-// small circles from smallCircleLines (its header explains the fidelity).
-// Meridians span ±latLimit so they don't pile up at the poles (d3-geo's
-// graticule trims the same way); parallels sit at symmetric multiples of step,
-// so the equator is always included.
+// one multi-radius smallCircleLines call around the pole (its header explains
+// the fidelity). Meridians span ±latLimit so they don't pile up at the poles
+// (d3-geo's graticule trims the same way); parallels sit at symmetric
+// multiples of step, so the equator is always included.
 export function graticuleLines({ step = 10, latLimit = 80 } = {}) {
   const xyz = [], starts = [0];
   for (let lng = -180; lng < 180; lng += step) {         // meridians (geodesic)
@@ -303,10 +305,12 @@ export function graticuleLines({ step = 10, latLimit = 80 } = {}) {
     starts.push(xyz.length / 3);
   }
   const latMax = Math.floor(latLimit / step) * step;
-  for (let lat = -latMax; lat <= latMax; lat += step) {  // parallels (small circles)
-    xyz.push(...smallCircleLines({ center: [0, 90], radius: 90 - lat }).xyz);
-    starts.push(xyz.length / 3);
-  }
+  const radii = [];
+  for (let lat = -latMax; lat <= latMax; lat += step) radii.push(90 - lat);
+  const par = smallCircleLines({ center: [0, 90], radius: radii });
+  const base = xyz.length / 3;
+  for (const v of par.xyz) xyz.push(v);
+  for (let i = 1; i < par.starts.length; i++) starts.push(base + par.starts[i]);
   return { xyz: new Float32Array(xyz), starts: new Uint32Array(starts) };
 }
 
@@ -432,7 +436,16 @@ export class Orb {
     this.cam = new Camera(canvas, () => { this._invalidate(); this._emit('viewchange'); }, signal);
     this._dirty = true;
     canvas.addEventListener('pointermove', (e) => this._emitPointer('hover', e), { signal });
-    canvas.addEventListener('click', (e) => this._emitPointer('click', e), { signal });
+    // 'click' means "the user clicked a spot", not the raw DOM event: the DOM
+    // fires click on every press+release pair, including releasing an arcball
+    // drag — an artifact of the library's own interaction that every consumer
+    // would otherwise have to suppress. Swallow clicks whose pointer travelled.
+    let downAt = null;
+    canvas.addEventListener('pointerdown', (e) => { downAt = [e.offsetX, e.offsetY]; }, { signal });
+    canvas.addEventListener('click', (e) => {
+      if (downAt && Math.hypot(e.offsetX - downAt[0], e.offsetY - downAt[1]) > 4) return;
+      this._emitPointer('click', e);
+    }, { signal });
 
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);

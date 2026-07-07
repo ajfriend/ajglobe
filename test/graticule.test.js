@@ -27,6 +27,18 @@ test('smallCircleLines: closed ring of unit points at the given angular radius',
   assert.deepEqual(ring[0], ring[ring.length - 1]);       // closed
 });
 
+test('smallCircleLines: radius array yields one closed ring per entry, shared center', () => {
+  const radii = [5, 15, 30];
+  const out = smallCircleLines({ center: [10, 20], radius: radii });
+  const rings = polylines(out);
+  assert.equal(rings.length, radii.length);
+  const n = lnglatToVec3(10, 20);
+  rings.forEach((ring, k) => {
+    for (const p of ring) assert.ok(Math.abs(vec3.dot(p, n) - Math.cos(radii[k] * DEG)) < 1e-6);
+    assert.deepEqual(ring[0], ring[ring.length - 1]);
+  });
+});
+
 test('smallCircleLines: sampling converges to the geodesic policy at a great circle', () => {
   // radius 90° IS a great circle: expect ~2π/MAX_SEG (=0.02) segments
   const [ring] = polylines(smallCircleLines({ center: [0, 90], radius: 90 }));

@@ -142,7 +142,7 @@ layer.update({ fill });            // restyle in place (no re-tessellation)
 layer.remove();
 orb.lines({ lnglat|xyz, starts, color, width });   // thick AA great-circle strokes
 orb.graticule({ step?, latLimit?, color?, width? });  // meridian/parallel grid (sync; pure geometry)
-smallCircleLines({ center, radius });  // pure: closed ring at angular radius (range rings, parallels)
+smallCircleLines({ center, radius });  // pure: closed ring(s) at angular radius | radius[] (range rings, parallels)
 orb.points({ lnglat|xyz, color, size });           // round disc markers (per-feature)
 orb.lookAt(lng, lat);              // center a point, north up
 orb.getView();                     // -> {q, zoom}   exact, fast view
@@ -154,6 +154,7 @@ orb.unproject(x, y);               // -> {lng, lat} | null
 orb.pick(x, y);                    // -> {layer, index} | null  (GPU color picking)
 orb.highlight(index);              // tint one fill feature (-1 = none)
 orb.on('hover'|'click'|'viewchange', cb);          // hover/click: {x,y,lng,lat,index,layer}
+                                   // 'click' means a stationary click: drag-releases are swallowed (<=4px travel)
 await orb.snapshot({ width, height, supersample, transparent, type });  // -> PNG Blob
 orb.stats;                         // {cells, verts}
 orb.destroy();                     // stop the loop, detach listeners, free all GPU resources
@@ -346,14 +347,12 @@ substrate from M2.
   rejected alternatives: a lat/lng-linear interpolation mode in `lines()`
   (reintroduces the 2D parameterization + antimeridian wrap the thesis exists
   to kill), and per-segment curve metadata (complicates the flat data model for
-  one consumer). Instead `smallCircleLines({center, radius})` samples the circle
-  in pure xyz (orthonormal frame around the axis — seam-free) with a *derived*
-  step: Δt = MAX_SEG/√sinθ bounds the drawn geodesic chords' deviation from the
-  circle by MAX_SEG²/8, the geodesic densifier's own chord budget — one fidelity
-  constant owns every curve, and at θ=90° (a great circle) the policy converges
-  to the geodesic one. (Replaced graticule's original flat 2° pre-sampling,
-  which was calibrated against renderer internals from the outside.) Public:
-  range/distance rings are one call. Perfectly-round small circles at extreme
+  one consumer). Instead `smallCircleLines({center, radius|radius[]})` samples
+  in pure xyz (seam-free) with a step *derived* from MAX_SEG, so one fidelity
+  constant owns every curve — the bound is derived in the `smallCircleLines`
+  header. (Replaced graticule's original flat 2° pre-sampling, which was
+  calibrated against renderer internals from the outside.) Public: a
+  range/distance ring set is one call. Perfectly-round small circles at extreme
   zoom would need vertex-shader evaluation — same deferred trade as dynamic-LOD
   geodesics (§7 geodesic-path substrate).
 - **Color scales in examples: linear value-based, never rank/percentile**
