@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ajglobe — mu3 aspect ratio</title>
+<style>
+  html,body{margin:0;height:100%;background:#fff;color:#333;
+    font:13px ui-monospace,Menlo,monospace;overflow:hidden}
+  #c{position:absolute;inset:0;width:100%;height:100%;display:block;
+    touch-action:none;cursor:grab}
+  #c:active{cursor:grabbing}
+  #c:focus{outline:none}
+  #bar{position:absolute;top:0;left:0;right:0;z-index:10;
+    display:flex;align-items:center;flex-wrap:wrap;gap:7px;padding:8px 14px;
+    background:rgba(255,255,255,0.92);border-bottom:1px solid #ececec}
+  #bar b{font-weight:700}
+  .sep{color:#b9b9b9;margin:0 1px}
+  button{font:inherit;border:1px solid #dcdcdc;background:#f7f7f7;border-radius:6px;
+    padding:4px 10px;cursor:pointer;color:#333}
+  button.on{background:#111;color:#fff;border-color:#111}
+  #status{margin-left:auto;color:#999}
+  #hud{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:10;
+    background:#0b0e13ee;color:#cdd6e0;border:1px solid #2a323d;border-radius:9px;
+    padding:9px 15px;line-height:1.5;white-space:nowrap;}
+  #hud b{color:#fff}
+  #hud .dim{color:#7d8b99}
+</style>
+</head>
+<body>
+<div id="bar">
+  <b>ajglobe</b> <span class="sep">·</span> mu3 · skar AR
+  <span class="sep">res</span>
+  <button data-r="0">0</button><button data-r="1">1</button><button data-r="2" class="on">2</button><button data-r="3">3</button><button data-r="4">4</button><button data-r="5">5</button><button data-r="6">6</button>
+  <span id="status">…</span>
+</div>
+<canvas id="c"></canvas>
+<div id="hud"><span class="dim">hover a cell…</span></div>
+
+<script type="module">
+import { Orb } from '../src/orb.js';
+
+const orb = new Orb(document.getElementById('c'), { background:'#ffffff', sphere:'#e0e6ed' });
+window.orb = orb;   // console / bench access (PLAN §8)
+const status = document.getElementById('status');
+const hud = document.getElementById('hud');
+
+// viridis via 8 control stops (no d3) — same as the other DGGS examples.
+const STOPS = [[68,1,84],[71,44,122],[59,81,139],[44,113,142],
+               [33,144,141],[39,173,129],[92,200,99],[253,231,37]];
+function viridis(t){
+  t = Math.max(0, Math.min(1, t)) * (STOPS.length - 1);
+  const i = Math.min(STOPS.length - 2, t | 0), f = t - i, a = STOPS[i], b = STOPS[i+1];
+  return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f, 255];
+}
+async function bin(name, Ctor){ const b = await fetch(`data/${name}`).then(r=>{if(!r.ok)throw new Error(name+' '+r.status);return r.arrayBuffer();}); return new Ctor(b); }
+
+// ---- mu3 cell id from (res, index) — no ids.json needed. -------------------
+// cells_at_res enumerates (base 0..11) × digit tuples over {0..6} in lex order,
+// skipping tuples whose first nonzero digit is 1 (pentagon-deleted direction).
+// So a cell's id is recoverable from its index by lex unranking. V[m] counts
+// valid length-m digit tails while the prefix is still all zeros; verified
+// index-for-index against mu3's cells_at_res for res 0-3.
+const V = [1];
+for (let m = 1; m <= 8; m++) V[m] = V[m - 1] + 5 * 7 ** (m - 1);
+function cellId(res, i){
+  const per = V[res], base = (i / per) | 0;
+  let r = i - base * per, out = '', zero = true;
+  for (let m = res - 1; m >= 0; m--) {
+    if (zero) {
+      if (r < V[m]) { out += '0'; continue; }       // digit 0 keeps the zero prefix
+      r -= V[m];
+      const p = 7 ** m, d = 2 + ((r / p) | 0);      // digit 1 is skipped
+      out += d; r -= (d - 2) * p; zero = false;
+    } else {
+      const p = 7 ** m, d = (r / p) | 0;
+      out += d; r -= d * p;
+    }
+  }
+  return res ? `${base}-${out}` : String(base);
+}
+const isPentagon = (res, i) => i % V[res] === 0;    // all-zero digits lead each base's block
+
+// ---- resolution switching ---------------------------------------------------
+// Raw binaries are cached per res (cheap to hold); the fill layer is rebuilt on
+// each switch — two polygon layers at once would z-fight (PLAN §8), and rebuild
+// is fast (~0.4 s even at res 6's 1.18M cells).
+const cache = new Map();
+const loadRes = (res) => {
+  if (!cache.has(res)) cache.set(res, Promise.all([
+    bin(`mu3_r${res}_pos.f32`, Float32Array),
+    bin(`mu3_r${res}_idx.u32`, Uint32Array),
+    bin(`mu3_r${res}_ar.f32`, Float32Array),
+  ]));
+  return cache.get(res);
+};
+
+let layer = null, cur = { res: 2, ar: null };
+let epoch = 0;                                       // ignore stale async switches
+async function show(res){
+  const e = ++epoch;
+  status.textContent = `loading r${res}…`;
+  let pos, starts, ar;
+  try { [pos, starts, ar] = await loadRes(res); }
+  catch (err) { status.textContent = `r${res}: ${err.message} — regenerate examples/data (see scripts/)`; return; }
+  if (e !== epoch) return;
+
+  let min = Infinity, max = -Infinity;
+  for (const a of ar) if (Number.isFinite(a)) { if (a < min) min = a; if (a > max) max = a; }
+  // a near-zero span is float noise (r0: 12 congruent pentagons, all AR 1.0) —
+  // don't amplify it into fake color variation; draw everything at t=0 instead.
+  const span = max - min > 1e-4 ? max - min : Infinity;
+
+  if (layer) layer.remove();
+  const t0 = performance.now();
+  layer = orb.polygons({ lnglat: pos, starts, fill: i => {
+    const a = ar[i];
+    if (!Number.isFinite(a)) return [120, 120, 120, 255];
+    return viridis((a - min) / span);
+  }});
+  cur = { res, ar };
+  const nCells = starts.length - 1;
+  status.textContent = `${nCells.toLocaleString()} cells · AR ${min.toFixed(3)}–${max.toFixed(3)} · built ${Math.round(performance.now() - t0)} ms`;
+  document.querySelectorAll('[data-r]').forEach(b => b.classList.toggle('on', +b.dataset.r === res));
+}
+document.querySelectorAll('[data-r]').forEach(b => b.onclick = () => show(+b.dataset.r));
+
+// Hover HUD: GPU pick → cell id (unranked), pentagon tag, skar AR.
+orb.on('hover', (e) => {
+  if (layer) orb.highlight(e.layer === layer ? e.index : -1);
+  if (e.index == null || e.layer !== layer) { hud.innerHTML = '<span class="dim">hover a cell…</span>'; return; }
+  const pent = isPentagon(cur.res, e.index) ? ' · <b>pentagon</b>' : '';
+  hud.innerHTML = `<b>mu3 r${cur.res}</b> · cell <b>${cellId(cur.res, e.index)}</b>${pent} · skar AR <b>${cur.ar[e.index].toFixed(4)}</b>`;
+});
+
+// Keyboard rotation is scoped to the focused canvas; keep focus after bar clicks.
+orb.canvas.focus();
+document.getElementById('bar').addEventListener('click', () => orb.canvas.focus());
+
+orb.borders({ color: '#1a1a1a', width: 1.2, lift: 1.0035 });   // context outlines (CDN, stitched)
+orb.lookAt(10, 25);
+show(2);
+</script>
+</body>
+</html>

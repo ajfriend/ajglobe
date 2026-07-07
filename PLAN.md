@@ -400,6 +400,15 @@ substrate from M2.
   start indices (len = nCells+1), `_ar.f32` = Float32 aspect ratio per cell.
 - The ivea7h pole cell + antimeridian + 1.18M-cell perf is the permanent
   acceptance test: if it renders right and fast, the library is doing its job.
+- **mu3 AR demo** `examples/mu3-ar.html`: single globe, HUD switches mu3
+  resolution 0–6 (12 → 1,176,492 cells; r6 builds ~450 ms), cells colored by
+  skar AR (linear min→max; near-zero span guarded — r0's congruent pentagons
+  would otherwise amplify float noise into fake variation), hover → cell id +
+  pentagon tag + AR. No ids.json: mu3's `cells_at_res` is canonical lex order,
+  so the id is recovered from the pick index by lex *unranking* in JS (verified
+  index-for-index vs Python for r0–r3). Data from `scripts/gen_mu3_geom.py`
+  (mu3 via a `file://` dep on ~/work/mu3_all/mu3_code; r6 geometry ~95 s) +
+  `gen_cells_ar.py` (skar env, NAMES knob). All gitignored.
 - **Two-globe demo** `examples/dggs-compare.html`: two rotationally + zoom synced
   globes (H3 res 1 vs res 2), cells colored by skar AR, hover → HUD with the H3 cell
   id + AR. Shows multi-`Orb` use, GPU picking, and view-sync on the public API:

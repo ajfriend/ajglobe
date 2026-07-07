@@ -143,6 +143,12 @@ uv run scripts/gen_cells_geom.py                              # H3 geometry + id
 cd ~/work/skar_py && uv run --no-sync ~/work/ajglobe/scripts/gen_cells_ar.py   # skar AR
 ```
 
+`examples/mu3-ar.html` colors **mu3** cells (a prototype icosahedral aperture-7
+DGGS) by skar AR, with a toolbar to switch resolution 0–6 (12 → 1,176,492 cells);
+hover a cell for its id (+ pentagon tag) and AR. Generate the data with
+`uv run scripts/gen_mu3_geom.py` (edit `RES_LIST`), then the same `gen_cells_ar.py`
+pass as above (edit its `NAMES`).
+
 ## Develop
 
 No build step is needed to use or hack on it — examples import `src/orb.js` directly.

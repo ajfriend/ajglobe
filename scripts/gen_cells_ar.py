@@ -21,7 +21,7 @@ import numpy as np
 import skar
 
 # ----- knobs --------------------------------------------------------------
-NAMES = ['h3_r1', 'h3_r2']     # each must match a gen_cells_geom.py output stem
+NAMES = [f'mu3_r{n}' for n in range(7)]   # each must match a gen_*_geom.py output stem
 OUT = Path.home() / 'work' / 'ajglobe' / 'examples' / 'data'
 GAP_TOL = 1e-6
 # --------------------------------------------------------------------------
