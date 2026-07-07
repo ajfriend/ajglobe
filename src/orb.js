@@ -332,11 +332,19 @@ export function graticuleLines({ step = 10, latLimit = 80 } = {}) {
 // (pay-per-use — the core ships no dependency). It un-cuts the antimeridian/polar
 // splits that GeoJSON polygons carry for 2D validity (Russia, Antarctica), turning
 // them back into proper spherical rings — which is what we draw. Cached after load.
-// NB: this https import stays external in the dist build (package.json build's
-// `--external:https://*`) so d3-geo is never bundled; revisit that flag if it moves.
+//
+// The import goes through new Function so it is OPAQUE TO BUNDLERS: a literal
+// import('https://…') in the dist bundle makes webpack fail every consumer's
+// build ("Module not found") even if borders() is never called, and esbuild's
+// --minify strips any /* webpackIgnore */ comment that could prevent it. The
+// indirection only executes when stitching actually runs; environments with a
+// strict CSP (no 'unsafe-eval') should pass their own `stitch: fn` instead.
 let _stitch;
 async function loadStitch() {
-  if (!_stitch) _stitch = (await import('https://cdn.jsdelivr.net/npm/d3-geo-projection@4/+esm')).geoStitch;
+  if (!_stitch) {
+    const dynamicImport = new Function('u', 'return import(u)');   // built here, not at module load
+    _stitch = (await dynamicImport('https://cdn.jsdelivr.net/npm/d3-geo-projection@4/+esm')).geoStitch;
+  }
   return _stitch;
 }
 // Apply a geoStitch fn per feature-geometry (robust across GeoJSON shapes).

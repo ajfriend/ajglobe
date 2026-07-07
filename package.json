@@ -5,8 +5,11 @@
   "type": "module",
   "main": "./dist/ajglobe.min.js",
   "module": "./dist/ajglobe.min.js",
+  "unpkg": "./dist/ajglobe.iife.min.js",
+  "jsdelivr": "./dist/ajglobe.iife.min.js",
   "exports": {
     ".": "./dist/ajglobe.min.js",
+    "./iife": "./dist/ajglobe.iife.min.js",
     "./src/orb.js": "./src/orb.js"
   },
   "sideEffects": false,
@@ -16,13 +19,20 @@
     "README.md",
     "LICENSE"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ajfriend/ajglobe.git"
+  },
+  "homepage": "https://github.com/ajfriend/ajglobe#readme",
+  "bugs": "https://github.com/ajfriend/ajglobe/issues",
+  "author": "AJ Friend",
   "scripts": {
     "serve": "uv run -m http.server 8080",
     "test": "node --test",
     "build": "npm run build:esm && npm run build:iife",
     "build:esm": "esbuild src/orb.js --bundle --format=esm --minify --sourcemap --external:https://* --outfile=dist/ajglobe.min.js",
     "build:iife": "esbuild src/orb.js --bundle --format=iife --global-name=ajglobe --minify --sourcemap --external:https://* --outfile=dist/ajglobe.iife.min.js",
-    "prepare": "npm run build"
+    "prepack": "npm run build"
   },
   "keywords": [
     "globe",

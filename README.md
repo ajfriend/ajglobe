@@ -50,10 +50,16 @@ rotation, `dist/` bundles, geometry unit tests, and `destroy()`. Next: npm. See
 the keyboard rotates too — arrows / `WASD` tilt and spin, `Q`/`E` (and `←`/`→`)
 roll, `Shift` for a bigger step.
 
-## Use
+## Install / Use
+
+```sh
+npm install ajglobe
+```
 
 ```js
-import { Orb } from './src/orb.js';
+import { Orb } from 'ajglobe';
+// (hacking on this repo? examples import the source directly: '../src/orb.js')
+
 const orb = new Orb(canvas, { background: '#0b0e13', sphere: '#11151c' });
 orb.polygons({
   lnglat,           // Float32Array [lng,lat, ...]  (or xyz: [x,y,z,...])
@@ -71,6 +77,11 @@ orb.on('hover', e => { /* e.index = feature under the cursor (GPU picking) */ })
 orb.getView();              // -> { q, zoom }   the exact, fast view
 orb.setView({ q, zoom });   // apply it; idempotent (re-applying the current view no-ops)
 ```
+
+Colors are `'#rrggbb'` strings or `[r, g, b, a]` arrays of **0–255 integers**
+(they go straight into RGBA8 texels — WebGL-style 0–1 floats will render as
+black). For a `<script>` tag without a bundler, the IIFE build exposes a global:
+`<script src="https://cdn.jsdelivr.net/npm/ajglobe"></script>` → `ajglobe.Orb`.
 
 **`lnglat` vs `xyz`:** every geometry-taking call (`polygons`, `lines`, `points`)
 accepts either `lnglat` — a Float32Array of `[lng, lat, …]` in degrees, converted
