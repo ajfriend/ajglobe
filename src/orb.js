@@ -527,19 +527,12 @@ export class Orb {
 
   // Pack one RGBA8 texel per feature from the fill value, row-major into `data`
   // (retained by _makeStyle and rewritten in place on restyle — no per-restyle
-  // allocation at DGGS scale). A constant color parses once and block-fills;
-  // only a per-feature fn pays the n× call + parse cost.
+  // allocation at DGGS scale). A constant color parses once; only a per-feature
+  // fn pays the n× call + parse cost.
   _buildStyle(n, data, fill) {
-    if (typeof fill !== 'function') {
-      const col = hexRGBA(fill);
-      for (let c = 0; c < n; c++) {
-        data[c * 4] = col[0]; data[c * 4 + 1] = col[1];
-        data[c * 4 + 2] = col[2]; data[c * 4 + 3] = col[3];
-      }
-      return data;
-    }
+    const cc = typeof fill === 'function' ? null : hexRGBA(fill);
     for (let c = 0; c < n; c++) {
-      const col = hexRGBA(fill(c));
+      const col = cc || hexRGBA(fill(c));
       data[c * 4] = col[0]; data[c * 4 + 1] = col[1];
       data[c * 4 + 2] = col[2]; data[c * 4 + 3] = col[3];
     }
@@ -704,7 +697,16 @@ export class Orb {
   lines({ xyz, lnglat, starts, color = '#ffffff', width = 1.5, dash = null }) {
     const gl = this.gl;
     const nLines = starts.length - 1;
-    const vec = (i) => this._posAt(xyz, lnglat, i);
+    const nVerts = xyz ? xyz.length / 3 : lnglat.length / 2;
+
+    // positions -> unit-sphere xyz, once (as polygons() does) — both passes
+    // below read this instead of re-deriving per pass
+    let pos = xyz;
+    if (!pos) {
+      pos = new Float32Array(nVerts * 3);
+      for (let v = 0; v < nVerts; v++) lnglatToVec3Into(pos, v * 3, lnglat[v * 2], lnglat[v * 2 + 1]);
+    }
+    const vec = (i) => [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]];
 
     // Instanced: ONE record per drawn segment — both endpoints and, when dashed,
     // the cumulative arc length at each end. The shared 4-corner a_param buffer
@@ -717,17 +719,20 @@ export class Orb {
     // default) the shader reads the constant 0, and u_dash = (0,0) never tests
     // it. A counting pass sizes the typed buffers exactly, so there are no JS
     // staging arrays (the 10m coastline's ~400k segments used to stage in
-    // plain arrays before conversion). Measured there: 61.8 -> 9.8 MB GPU.
+    // plain arrays before conversion); it stashes each edge's angle and piece
+    // count so the build pass doesn't recompute them. Measured on the 10m
+    // coastline: 61.8 -> 9.8 MB GPU.
     let nSegs = 0;
-    const eN = [];                    // slerp piece count per input edge (reused below)
+    const eN = [], eA = [];           // per input edge: slerp piece count, angle
     for (let l = 0; l < nLines; l++) {
       const s = starts[l], e = starts[l + 1];
       if (e - s < 2) continue;
       let prev = vec(s);
       for (let i = s + 1; i < e; i++) {
         const cur = vec(i);
-        const n = Math.max(1, Math.ceil(vec3.angle(prev, cur) / MAX_SEG));
-        eN.push(n); nSegs += n;
+        const ang = vec3.angle(prev, cur);
+        const n = Math.max(1, Math.ceil(ang / MAX_SEG));
+        eN.push(n); eA.push(ang); nSegs += n;
         prev = cur;
       }
     }
@@ -740,7 +745,8 @@ export class Orb {
       if (e - s < 2) continue;
       let a = vec(s), arc = 0;        // arc length restarts per polyline (dash phase)
       for (let i = s + 1; i < e; i++) {
-        const b = vec(i), n = eN[ei++], ang = vec3.angle(a, b);
+        const b = vec(i), n = eN[ei], ang = eA[ei];
+        ei++;
         let p0 = a;
         for (let k = 1; k <= n; k++) {
           const p1 = k < n ? vec3.slerp(a, b, k / n) : b;

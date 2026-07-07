@@ -155,6 +155,11 @@ export class Camera {
   matrices(aspect) {
     const c = this._mats;
     if (c && c.q === this.q && c.zoom === this.zoom && c.aspect === aspect) return c;
+    // Freeze the cached orientation: the cache key is q's reference identity,
+    // which is sound only while q is replaced rather than mutated. Freezing
+    // turns a future in-place write (which would silently serve stale
+    // matrices) into a loud TypeError at the offending site.
+    Object.freeze(this.q);
     const vp = this.vp(aspect);
     return (this._mats = {
       q: this.q, zoom: this.zoom, aspect,
@@ -166,18 +171,16 @@ export class Camera {
     return this.matrices(aspect).mvp;
   }
 
-  // CSS px <-> NDC. One place owns the convention (y flips between the spaces).
-  _pxToNdc(px, py, r) { return [(px / r.width) * 2 - 1, 1 - (py / r.height) * 2]; }
-  _ndcToPx(nx, ny, r) { return { x: (nx * 0.5 + 0.5) * r.width, y: (1 - (ny * 0.5 + 0.5)) * r.height }; }
-
   // Geographic point -> canvas CSS pixels. visible=false when the point is on
-  // the far (back) hemisphere, behind the globe from the viewer.
+  // the far (back) hemisphere, behind the globe from the viewer. (px <-> NDC
+  // y-flip convention: mirror of unproject's.)
   project(lngDeg, latDeg) {
     const p = lnglatToVec3(lngDeg, latDeg);
     const r = this.canvas.getBoundingClientRect();
     const clip = mat4.mulVec4(this.mvp(r.width / r.height), [p[0], p[1], p[2], 1]);
     return {
-      ...this._ndcToPx(clip[0] / clip[3], clip[1] / clip[3], r),
+      x: (clip[0] / clip[3] * 0.5 + 0.5) * r.width,
+      y: (1 - (clip[1] / clip[3] * 0.5 + 0.5)) * r.height,
       // Front hemisphere = the model-rotated point faces the +z viewer.
       visible: quat.rotateVec3(this.q, p)[2] > 0,
     };
@@ -192,7 +195,7 @@ export class Camera {
     const m = this.matrices(r.width / r.height);
     const inv = m.inv !== undefined ? m.inv : (m.inv = mat4.invert(m.mvp));
     if (!inv) return null;
-    const [nx, ny] = this._pxToNdc(px, py, r);
+    const nx = (px / r.width) * 2 - 1, ny = 1 - (py / r.height) * 2;
     const at = (z) => { const v = mat4.mulVec4(inv, [nx, ny, z, 1]); return [v[0] / v[3], v[1] / v[3], v[2] / v[3]]; };
     const a = at(-1), d = vec3.sub(at(1), a);            // ray a + t d (object space)
     const A = vec3.dot(d, d), B = 2 * vec3.dot(a, d), C = vec3.dot(a, a) - 1;

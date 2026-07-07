@@ -145,17 +145,18 @@ export function fanFillGeometry(pos, starts, nFeatures) {
   if (!coarse.length) return { pos, fids, idx: fineIdx };
 
   // Coarse features: copy their verts into a small local scratch (subdivideTri
-  // needs plain-array push), subdivide, then splice the output back — local
-  // originals remap through globalOf, subdivision verts append after nVerts.
-  const P = [], F = [], I = [], globalOf = [];
+  // needs plain-array push), subdivide there, and append the WHOLE scratch —
+  // ring copies and subdivision verts alike — after the original block. The
+  // coarse originals in [0, nVerts) go unreferenced (a few dead verts, cheap),
+  // and in exchange every coarse-path index remaps by one uniform offset: no
+  // assumptions about how subdivideTri lays out or orders its appends.
+  const P = [], F = [], I = [];
   for (const c of coarse) {
     for (let v = starts[c]; v < starts[c + 1]; v++) {
-      globalOf.push(v);
       P.push(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]);
       F.push(c);
     }
   }
-  const nLocal = globalOf.length;
   let off = 0;
   for (const c of coarse) {
     const k = starts[c + 1] - starts[c];
@@ -163,19 +164,16 @@ export function fanFillGeometry(pos, starts, nFeatures) {
     off += k;
   }
 
-  const nNew = P.length / 3 - nLocal;
-  const allPos = new Float32Array((nVerts + nNew) * 3);
+  const nExtra = P.length / 3;
+  const allPos = new Float32Array((nVerts + nExtra) * 3);
   allPos.set(pos);
-  for (let i = 0; i < nNew * 3; i++) allPos[nVerts * 3 + i] = P[nLocal * 3 + i];
-  const allFids = new Uint32Array(nVerts + nNew);
+  allPos.set(P, nVerts * 3);
+  const allFids = new Uint32Array(nVerts + nExtra);
   allFids.set(fids);
-  for (let i = 0; i < nNew; i++) allFids[nVerts + i] = F[nLocal + i];
+  allFids.set(F, nVerts);
   const idx = new Uint32Array(fineIdx.length + I.length);
   idx.set(fineIdx);
-  for (let i = 0; i < I.length; i++) {
-    const li = I[i];
-    idx[fineIdx.length + i] = li < nLocal ? globalOf[li] : nVerts + (li - nLocal);
-  }
+  for (let i = 0; i < I.length; i++) idx[fineIdx.length + i] = nVerts + I[i];
   return { pos: allPos, fids: allFids, idx };
 }
 

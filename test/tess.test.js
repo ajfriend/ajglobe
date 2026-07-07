@@ -139,11 +139,13 @@ test('degenerate rings emit nothing instead of flooding or crashing', () => {
   assert.deepEqual(triangulatePolygon(one.P, one.rings), []);
 });
 
+// CCW hexagon ring in lng/lat degrees, for complement-region tests.
+const hex = (cx, cy, r) => Array.from({ length: 6 }, (_, k) => {
+  const t = (k / 6) * 2 * Math.PI;
+  return [cx + r * Math.cos(t), cy + r * Math.sin(t)];
+});
+
 test('scattered complement (loops wider than any hemisphere) fails loudly, not wrongly', () => {
-  const hex = (cx, cy, r) => Array.from({ length: 6 }, (_, k) => {
-    const t = (k / 6) * 2 * Math.PI;
-    return [cx + r * Math.cos(t), cy + r * Math.sin(t)];
-  });
   const origWarn = console.warn;
   let warned = false;
   console.warn = () => { warned = true; };
@@ -158,10 +160,6 @@ test('scattered complement (loops wider than any hemisphere) fails loudly, not w
 });
 
 test('complement WITH holes: sphere minus two loops (both rings CW)', () => {
-  const hex = (cx, cy, r) => Array.from({ length: 6 }, (_, k) => {
-    const t = (k / 6) * 2 * Math.PI;
-    return [cx + r * Math.cos(t), cy + r * Math.sin(t)];
-  });
   // region = everything except two hexes: first ring CW (complement side),
   // second ring CW too (a hole cut out of that complement) — area 4π − a − b,
   // validated by the Gauss-Bonnet check inside runPoly
