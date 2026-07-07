@@ -277,9 +277,10 @@ substrate from M2.
       agreeing with `project().visible`**. Per-feature **color/alpha via the M2 style
       texture** (`update({color})` restyles), per-feature **radius via a vertex
       attribute** (`size`). **Pickable** through the M4 id-buffer, with fills + points
-      sharing one global id space. Built as **expanded quads (4 verts/point), not
-      instanced** — mirrors `lines()`, reuses `_attrib`/style-texture/pick infra, adds
-      no new GL concept. Verified headless on city markers: clean AA discs, picking
+      sharing one global id space. Originally expanded quads (4 verts/point);
+      **instanced since the M8 perf pass** — one record per point, feature id =
+      `gl_InstanceID`, shared corner-quad buffer (same shape as `lines()`).
+      Verified headless on city markers: clean AA discs, picking
       (`pick`/`on('hover')`), back hemisphere hidden, recolor, z-order over fills/
       strokes/coastlines, `glError 0`. Demo: `cities` toggle in `reference-detail.html`.
 - [x] **M7 — GeoJSON layer + concave polygons (2026-07-06)** — the production
@@ -288,14 +289,31 @@ substrate from M2.
   - [x] **concave polygon fills with holes** — `polygons({ polys })` ring
         grouping + `src/tess.js` (ear-clip; gnomonic or spherical-predicate
         path; §7). Includes the quarter-sphere antipodal-vertex 'cross' case.
-  - [x] **winding is meaningful** — CW single rings fill the complement
-        (Steiner fan from the cap-center antipode); the blog's loop-orientation
-        figures depend on it (§7).
+  - [x] **winding is meaningful** — CW outer rings fill the complement
+        (cap-ring split; §7); the blog's loop-orientation figures depend on it.
   - [x] `geojson()` styling layer (properties-driven, simplestyle-ish; §7)
   - [x] `interaction: { drag, wheel, keys }` — embeds keep page scroll
   - [x] `lines({ dash })` — arc-measured, zoom-stable px dashes
   - [x] all 8 blog globes verified against the originals; arrows/sync/
         double-click-reset/auto-center are app code in the example
+- [x] **M8 — release-prep perf pass (2026-07-07)** — after the npm code-review
+      fixes, the deferred efficiency items:
+  - [x] **per-cell subdivision dispatch** (`tess.fanFillGeometry`, pure +
+        unit-tested): only cells tripping the coarseness gate subdivide; fine
+        cells fan straight into typed buffers. Output proven triangle-identical
+        to the old all-cells path. 500k fine + 3 coarse: 145 → 18 ms, ~2 MB
+        transient heap.
+  - [x] **instanced strokes + points**: one record per segment/point + a
+        shared corner-quad buffer; point ids = `gl_InstanceID`; typed-buffer
+        counting pass kills the JS staging arrays. 10m coastline: 61.8 → 9.8 MB
+        GPU. Verified pixel-identical (cells-to-poly: 0 of 3.19M px differ).
+  - [x] **camera matrix cache** ((q-ref, zoom, aspect)-keyed; lazy inverse) —
+        per-frame label overlays build one matrix stack, not N.
+  - [x] **in-place restyle** (retained texel buffer; constants parse once):
+        r5 restyle 13.0 → 8.2 ms.
+  - [x] reuse: one circle sampler (`glmath.circlePointsInto`) for
+        smallCircleLines / graticule / tess cap split; px↔NDC pair in camera;
+        `_attrib`/`_attribI` merged.
 - [ ] **Later:** time-normalized momentum (opt-in), reuse the 3D core for 2D
       map projections, publish to npm. *(Depth-disk occluder: done, §7.
       Concave fills: done, M7. Perspective/deep zoom dropped 2026-07-06 — §7.)*

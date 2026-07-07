@@ -29,7 +29,7 @@
 // verts), not DGGS layers; convex DGGS cells keep the fan fast path in
 // polygons().
 
-import { vec3, quat } from './glmath.js';
+import { vec3, quat, circlePointsInto } from './glmath.js';
 
 // Max geodesic edge (radians) a fill triangle may keep un-split: subdivideTri
 // (orb.js) splits longer edges, and everything coupled to that budget derives
@@ -358,15 +358,10 @@ function triangulateGnomonic(P, rings, center, out) {
 // subdivideTri shared-edge argument).
 function complementRegion(P, rings, center, worst, out) {
   const th = (Math.acos(worst) + Math.PI / 2) / 2;      // split-circle radius
-  const q = quat.fromUnitVectors([0, 0, 1], center);
   // sample at the fill-edge budget so subdivideTri won't re-split ring edges
   const segs = Math.max(16, Math.ceil((2 * Math.PI) * Math.sin(th) / MAX_FILL_EDGE));
   const ring0 = P.length / 3;
-  const ct = Math.cos(th), st = Math.sin(th);
-  for (let i = 0; i < segs; i++) {
-    const t = (i / segs) * 2 * Math.PI;
-    P.push(...quat.rotateVec3(q, [st * Math.cos(t), st * Math.sin(t), ct]));
-  }
+  circlePointsInto(P, center, th, segs);
   const si = P.length / 3;                              // far side: fan the cap
   P.push(-center[0], -center[1], -center[2]);
   for (let i = 0; i < segs; i++) out.push(si, ring0 + ((i + 1) % segs), ring0 + i);

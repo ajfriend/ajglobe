@@ -12,7 +12,7 @@
 // texels, never the geometry. The same featureId drives GPU picking. Three
 // primitives — polygons (fills), lines (thick AA strokes), points (disc markers).
 
-import { lnglatToVec3, lnglatToVec3Into, vec3, quat, DEG } from './glmath.js';
+import { lnglatToVec3, lnglatToVec3Into, vec3, quat, DEG, circlePointsInto } from './glmath.js';
 import { triangulatePolygon, subdivideTri, fanFillGeometry, COS_SPOKE_GATE } from './tess.js';
 import { Camera } from './camera.js';
 
@@ -292,19 +292,15 @@ export function geojsonLines(gj) {
 // constant owns every curve; at θ = 90° (a great circle) this converges to
 // the geodesic policy exactly.
 export function smallCircleLines({ center, radius }) {
-  const q = quat.fromUnitVectors([0, 0, 1], lnglatToVec3(center[0], center[1]));
+  const axis = lnglatToVec3(center[0], center[1]);
   const xyz = [], starts = [0];
   for (const deg of Array.isArray(radius) ? radius : [radius]) {
     // clamp to the sphere's valid range: outside it, sin(θ) < 0 poisons the
     // segment count with NaN and the returned buffer with undefined slots
     const th = Math.min(180, Math.max(0, deg)) * DEG;
-    const ct = Math.cos(th), st = Math.sin(th);
-    const segs = Math.max(8, Math.ceil((2 * Math.PI) * Math.sqrt(st) / MAX_SEG));
+    const segs = Math.max(8, Math.ceil((2 * Math.PI) * Math.sqrt(Math.sin(th)) / MAX_SEG));
     const ring0 = xyz.length;
-    for (let i = 0; i < segs; i++) {
-      const t = (i / segs) * 2 * Math.PI;
-      xyz.push(...quat.rotateVec3(q, [st * Math.cos(t), st * Math.sin(t), ct]));
-    }
+    circlePointsInto(xyz, axis, th, segs);
     xyz.push(xyz[ring0], xyz[ring0 + 1], xyz[ring0 + 2]);   // close the ring bitwise
     starts.push(xyz.length / 3);
   }

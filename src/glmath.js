@@ -122,6 +122,21 @@ export const quat = {
 
 export const DEG = Math.PI / 180;
 
+// Append `segs` xyz samples of the small circle at angular radius `th` (radians)
+// around unit `axis` to the flat array `out` — open (no repeated closing point);
+// the caller owns closing and segment policy. The one circle sampler in the
+// library: orb's smallCircleLines/graticule parallels and tess's complement cap
+// split all draw from here, so every circle shares one orientation/start-point
+// convention.
+export function circlePointsInto(out, axis, th, segs) {
+  const q = quat.fromUnitVectors([0, 0, 1], axis);
+  const ct = Math.cos(th), st = Math.sin(th);
+  for (let i = 0; i < segs; i++) {
+    const t = (i / segs) * 2 * Math.PI;
+    out.push(...quat.rotateVec3(q, [st * Math.cos(t), st * Math.sin(t), ct]));
+  }
+}
+
 // Object-space unit "north" (∂position/∂lat) at a lng/lat in degrees — the tangent
 // pointing toward the north pole. Used to define/read the screen roll of an orientation.
 function northAt(lngDeg, latDeg) {
