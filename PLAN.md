@@ -379,7 +379,14 @@ substrate from M2.
   says which region a ring means ("the plane lets you validate winding; the
   sphere only lets you obey it"). Decision (AJ): respect the input — outer
   winding is never normalized; sloppy planar exports are the data layer's
-  problem. Hole rings are oriented to their ROLE only (hole-ness comes from
+  problem. *The why, permanently:* plotting loop-orientation semantics is a
+  founding use case of this library (cells_to_poly demonstrates that a loop
+  and its reverse cover the sphere as complements) — a renderer that "fixes"
+  winding cannot draw that demonstration at all. Do not reintroduce winding
+  normalization "for robustness"; it would make the library edit the very
+  property its plots exist to show. (Same principle as the no-rank-color-
+  scales decision: render the data faithfully, never the library's opinion
+  of it.) Hole rings are oriented to their ROLE only (hole-ness comes from
   GeoJSON ring order; given the role, hole winding is redundant). Routing:
   CCW outer → gnomonic ear-clip at the bounding-cap center (Bâdoiu–Clarkson;
   Eberly hole bridging); CW single ring → complement via antipodal Steiner
