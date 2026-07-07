@@ -140,10 +140,10 @@ const MAX_SEG = 0.02;             // rad; lines() densifies longer edges into ar
 const DEPTH_BIAS_GLSL = `  gl_Position.z -= 0.0005 * gl_Position.w;`;
 
 const STROKE_VS = `#version 300 es
-in vec3 a_pA;
+in vec2 a_param;            // per-quad-corner: x: end (0=A, 1=B), y: side (-1/+1)
+in vec3 a_pA;               // per-instance (one instance = one segment)
 in vec3 a_pB;
-in vec2 a_param;            // x: end (0=A, 1=B), y: side (-1/+1)
-in float a_len;             // cumulative arc length at this end, radians
+in vec2 a_arc;              // cumulative arc length at A and B, radians
 uniform mat4 u_mvp;
 uniform vec2 u_viewport;    // device px
 uniform float u_hw;         // stroke half-width, device px
@@ -163,7 +163,7 @@ void main() {
   gl_Position = clip;
 ${DEPTH_BIAS_GLSL}
   v_dist = a_param.y * w;
-  v_len = a_len;
+  v_len = mix(a_arc.x, a_arc.y, a_param.x);
 }`;
 
 // Dashing: u_dash = (period, on-fraction) with lengths in device px; (0,0) =
@@ -194,10 +194,9 @@ void main() {
 // hemisphere hidden by the depth disk). Explicit attribute locations so the same
 // VAO drives both the color and the pick program (like FILL_VS).
 const POINT_VS = `#version 300 es
-layout(location = 0) in vec2 a_corner;     // unit-quad corner (-1/+1, -1/+1)
-layout(location = 1) in vec3 a_center;     // unit-sphere xyz (depth-biased over fills)
-layout(location = 2) in float a_radius;    // disc radius, CSS px
-layout(location = 3) in uint a_featureId;
+layout(location = 0) in vec2 a_corner;     // unit-quad corner (-1/+1, -1/+1); per-vertex
+layout(location = 1) in vec3 a_center;     // unit-sphere xyz; per-instance (one per point)
+layout(location = 2) in float a_radius;    // disc radius, CSS px; per-instance
 uniform mat4 u_mvp;
 uniform vec2 u_viewport;   // device px
 uniform float u_dppx;      // device px per CSS px (radius is CSS px)
@@ -205,7 +204,7 @@ flat out uint v_fid;
 out vec2 v_off;            // device-px offset from the disc center
 out float v_rad;           // disc radius, device px
 void main() {
-  v_fid = a_featureId;
+  v_fid = uint(gl_InstanceID);   // feature id == point index — no buffer needed
   float rad = a_radius * u_dppx;
   float pad = rad + 1.0;            // +1px so the AA ramp has room
   v_rad = rad;
@@ -414,6 +413,19 @@ export class Orb {
     this._pickPixel = new Uint8Array(4);   // reused readback scratch (per-pointer)
     this._buildDisk();
 
+    // Shared unit-quad corner buffers for instanced strokes/points, in
+    // TRIANGLE_STRIP order. One 4-vertex buffer each for the whole Orb; every
+    // stroke/point layer wires it into its VAO at divisor 0 while the real
+    // data advances per instance.
+    const quad = (data) => {
+      const b = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, b);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+      return b;
+    };
+    this._strokeQuad = quad([0, -1, 0, 1, 1, -1, 1, 1]);     // (end, side)
+    this._pointQuad = quad([-1, -1, 1, -1, -1, 1, 1, 1]);    // (corner x, y)
+
     this.layers = [];
     this.lineLayers = [];
     this.pointLayers = [];
@@ -469,6 +481,8 @@ export class Orb {
     if (this._pick) { this._freeTarget(this._pick); this._pick = null; }
     gl.deleteVertexArray(this.diskVAO);
     this._diskBuffers.forEach((b) => gl.deleteBuffer(b));
+    gl.deleteBuffer(this._strokeQuad);
+    gl.deleteBuffer(this._pointQuad);
     for (const n of this._progNames) gl.deleteProgram(this[n + 'Prog']);
   }
 
@@ -483,15 +497,21 @@ export class Orb {
   }
 
   // Create an ARRAY_BUFFER and wire it to a vertex attribute on the bound VAO.
-  _attrib(prog, name, data, size, type, normalized = false) {
+  // opts: int (vertexAttribIPointer — ids pass through unconverted), divisor
+  // (instanced: advance per instance, not per vertex), buf (wire an EXISTING
+  // buffer — the shared quad corners — instead of creating one; a shared buffer
+  // is owned by the Orb, so don't add it to the layer's _buffers).
+  _attrib(prog, name, data, size, { type, int = false, divisor = 0, buf = null } = {}) {
     const gl = this.gl;
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    const b = buf ?? gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    if (!buf) gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
     const loc = gl.getAttribLocation(prog, name);
     gl.enableVertexAttribArray(loc);
-    gl.vertexAttribPointer(loc, size, type ?? gl.FLOAT, normalized, 0, 0);
-    return buf;
+    if (int) gl.vertexAttribIPointer(loc, size, type, 0, 0);
+    else gl.vertexAttribPointer(loc, size, type ?? gl.FLOAT, false, 0, 0);
+    if (divisor) gl.vertexAttribDivisor(loc, divisor);
+    return b;
   }
 
   // Create an ELEMENT_ARRAY_BUFFER (indices) on the bound VAO.
@@ -500,18 +520,6 @@ export class Orb {
     const buf = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buf);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    return buf;
-  }
-
-  // Integer vertex attribute (vertexAttribIPointer; ids pass through unconverted).
-  _attribI(prog, name, data, size, type) {
-    const gl = this.gl;
-    const buf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    const loc = gl.getAttribLocation(prog, name);
-    gl.enableVertexAttribArray(loc);
-    gl.vertexAttribIPointer(loc, size, type, 0, 0);
     return buf;
   }
 
@@ -653,7 +661,7 @@ export class Orb {
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
     const pb = this._attrib(this.fillProg, 'a_pos', pos, 3);
-    const fb = this._attribI(this.fillProg, 'a_featureId', fids, 1, gl.UNSIGNED_INT);
+    const fb = this._attrib(this.fillProg, 'a_featureId', fids, 1, { int: true, type: gl.UNSIGNED_INT });
     const ib = this._elements(idx);
     gl.bindVertexArray(null);
 
@@ -691,52 +699,65 @@ export class Orb {
     const nLines = starts.length - 1;
     const vec = (i) => this._posAt(xyz, lnglat, i);
 
-    // Per segment, 4 verts carrying both endpoints (a_pA, a_pB) + (end, side) +
-    // when dashed, the cumulative arc length at that end. Sub-segment lengths
-    // come from the densification analytically (slerp is uniform in angle, so
-    // each of the n pieces is ang/n) — no per-piece trig. Undashed layers skip
-    // the length buffer entirely: with the attribute array disabled (the VAO
+    // Instanced: ONE record per drawn segment — both endpoints and, when dashed,
+    // the cumulative arc length at each end. The shared 4-corner a_param buffer
+    // (divisor 0) expands each instance to a screen-space quad in the vertex
+    // shader, so nothing repeats across quad corners and there is no index
+    // buffer — ~5x less GPU data than the old 4-vertex + 6-index expansion.
+    // Sub-segment lengths come from the densification analytically (slerp is
+    // uniform in angle, so each of the n pieces is ang/n). Undashed layers skip
+    // the arc buffer entirely: with the attribute array disabled (the VAO
     // default) the shader reads the constant 0, and u_dash = (0,0) never tests
-    // it — saves ~12% of vertex data on big layers like the 10m coastline.
-    const PA = [], PB = [], PRM = [], LEN = dash ? [] : null, IDX = [];
-    let base = 0;
+    // it. A counting pass sizes the typed buffers exactly, so there are no JS
+    // staging arrays (the 10m coastline's ~400k segments used to stage in
+    // plain arrays before conversion). Measured there: 61.8 -> 9.8 MB GPU.
+    let nSegs = 0;
+    const eN = [];                    // slerp piece count per input edge (reused below)
     for (let l = 0; l < nLines; l++) {
       const s = starts[l], e = starts[l + 1];
       if (e - s < 2) continue;
-      // densify the polyline by slerp so each drawn segment reads as a geodesic
-      // arc; dense[i] carries the cumulative arc length alongside each point
-      let prev = vec(s), arc = 0;
-      const dense = [[prev, 0]];
+      let prev = vec(s);
       for (let i = s + 1; i < e; i++) {
         const cur = vec(i);
-        const ang = vec3.angle(prev, cur);
-        const n = Math.max(1, Math.ceil(ang / MAX_SEG));
-        for (let k = 1; k <= n; k++) dense.push([vec3.slerp(prev, cur, k / n), arc + (ang * k) / n]);
+        const n = Math.max(1, Math.ceil(vec3.angle(prev, cur) / MAX_SEG));
+        eN.push(n); nSegs += n;
         prev = cur;
-        arc += ang;
       }
-      for (let i = 0; i + 1 < dense.length; i++) {
-        const [a, arcA] = dense[i], [b, arcB] = dense[i + 1];
-        for (let q = 0; q < 4; q++) { PA.push(a[0], a[1], a[2]); PB.push(b[0], b[1], b[2]); }
-        PRM.push(0, -1, 0, 1, 1, -1, 1, 1);
-        if (LEN) LEN.push(arcA, arcA, arcB, arcB);
-        IDX.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
-        base += 4;
+    }
+
+    const PA = new Float32Array(nSegs * 3), PB = new Float32Array(nSegs * 3);
+    const ARC = dash ? new Float32Array(nSegs * 2) : null;
+    let seg = 0, ei = 0;
+    for (let l = 0; l < nLines; l++) {
+      const s = starts[l], e = starts[l + 1];
+      if (e - s < 2) continue;
+      let a = vec(s), arc = 0;        // arc length restarts per polyline (dash phase)
+      for (let i = s + 1; i < e; i++) {
+        const b = vec(i), n = eN[ei++], ang = vec3.angle(a, b);
+        let p0 = a;
+        for (let k = 1; k <= n; k++) {
+          const p1 = k < n ? vec3.slerp(a, b, k / n) : b;
+          PA[seg * 3] = p0[0]; PA[seg * 3 + 1] = p0[1]; PA[seg * 3 + 2] = p0[2];
+          PB[seg * 3] = p1[0]; PB[seg * 3 + 1] = p1[1]; PB[seg * 3 + 2] = p1[2];
+          if (ARC) { ARC[seg * 2] = arc + (ang * (k - 1)) / n; ARC[seg * 2 + 1] = arc + (ang * k) / n; }
+          seg++; p0 = p1;
+        }
+        arc += ang;
+        a = b;
       }
     }
 
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
-    const pa = this._attrib(this.strokeProg, 'a_pA', new Float32Array(PA), 3);
-    const pb = this._attrib(this.strokeProg, 'a_pB', new Float32Array(PB), 3);
-    const pm = this._attrib(this.strokeProg, 'a_param', new Float32Array(PRM), 2);
-    const pl = LEN ? this._attrib(this.strokeProg, 'a_len', new Float32Array(LEN), 1) : null;
-    const ib = this._elements(new Uint32Array(IDX));
+    this._attrib(this.strokeProg, 'a_param', null, 2, { buf: this._strokeQuad });
+    const pa = this._attrib(this.strokeProg, 'a_pA', PA, 3, { divisor: 1 });
+    const pb = this._attrib(this.strokeProg, 'a_pB', PB, 3, { divisor: 1 });
+    const pl = ARC ? this._attrib(this.strokeProg, 'a_arc', ARC, 2, { divisor: 1 }) : null;
     gl.bindVertexArray(null);
 
     const layer = {
-      vao, count: IDX.length, nLines, width,
-      color: rgbaF(color), dash, _buffers: [pa, pb, pm, ...(pl ? [pl] : []), ib],
+      vao, count: nSegs, nLines, width,
+      color: rgbaF(color), dash, _buffers: [pa, pb, ...(pl ? [pl] : [])],
     };
     layer.remove = () => {
       this.lineLayers = this.lineLayers.filter((x) => x !== layer);
@@ -762,19 +783,14 @@ export class Orb {
     const sizeFn = asFn(size);
     const vec = (i) => this._posAt(xyz, lnglat, i);
 
-    // 4 verts per point (a screen-space quad); the vertex shader billboards them.
-    // a_center/a_radius/a_featureId repeat across the quad (as strokes repeat a_pA/B).
-    const CO = [], CEN = [], RAD = [], FID = [], IDX = [];
-    const corners = [-1, -1, 1, -1, -1, 1, 1, 1];
-    let base = 0;
+    // Instanced: one record per point (center + radius); the shared corner quad
+    // billboards it in the vertex shader, and the feature id is just
+    // gl_InstanceID — no per-corner repetition, no id buffer, no index buffer.
+    const CEN = new Float32Array(nPoints * 3), RAD = new Float32Array(nPoints);
     for (let p = 0; p < nPoints; p++) {
-      const v = vec(p), r = sizeFn(p);
-      for (let q = 0; q < 4; q++) {
-        CO.push(corners[q * 2], corners[q * 2 + 1]);
-        CEN.push(v[0], v[1], v[2]); RAD.push(r); FID.push(p);
-      }
-      IDX.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
-      base += 4;
+      const v = vec(p);
+      CEN[p * 3] = v[0]; CEN[p * 3 + 1] = v[1]; CEN[p * 3 + 2] = v[2];
+      RAD[p] = sizeFn(p);
     }
 
     // Per-feature color/alpha in a style texture sampled by id (same as fills).
@@ -782,16 +798,14 @@ export class Orb {
 
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
-    const cob = this._attrib(this.pointProg, 'a_corner', new Float32Array(CO), 2);
-    const ceb = this._attrib(this.pointProg, 'a_center', new Float32Array(CEN), 3);
-    const rab = this._attrib(this.pointProg, 'a_radius', new Float32Array(RAD), 1);
-    const fib = this._attribI(this.pointProg, 'a_featureId', new Uint32Array(FID), 1, gl.UNSIGNED_INT);
-    const ib = this._elements(new Uint32Array(IDX));
+    this._attrib(this.pointProg, 'a_corner', null, 2, { buf: this._pointQuad });
+    const ceb = this._attrib(this.pointProg, 'a_center', CEN, 3, { divisor: 1 });
+    const rab = this._attrib(this.pointProg, 'a_radius', RAD, 1, { divisor: 1 });
     gl.bindVertexArray(null);
 
     const layer = {
-      vao, count: IDX.length, nPoints,
-      styleTex, styleW: W, styleH: H, _buffers: [cob, ceb, rab, fib, ib],
+      vao, count: nPoints, nPoints,
+      styleTex, styleW: W, styleH: H, _buffers: [ceb, rab],
     };
     layer.update = ({ color: c } = {}) => { if (c != null) restyle(c); return layer; };
     layer.remove = () => {
@@ -1082,7 +1096,7 @@ export class Orb {
         if (d) gl.uniform2f(this.strokeU.dash, (d[0] + d[1]) * dppx, d[0] / (d[0] + d[1]));
         else gl.uniform2f(this.strokeU.dash, 0, 0);
         gl.bindVertexArray(l.vao);
-        gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, l.count);
       }
       gl.depthMask(true);
     }
@@ -1104,7 +1118,7 @@ export class Orb {
         gl.bindTexture(gl.TEXTURE_2D, l.styleTex);
         gl.uniform1i(this.pointU.styleW, l.styleW);
         gl.bindVertexArray(l.vao);
-        gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, l.count);
       }
       gl.depthMask(true);
     }
@@ -1186,7 +1200,7 @@ export class Orb {
       for (const l of this.pointLayers) {
         gl.uniform1ui(this.pointPickU.idBase, base);
         gl.bindVertexArray(l.vao);
-        gl.drawElements(gl.TRIANGLES, l.count, gl.UNSIGNED_INT, 0);
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, l.count);
         base += l.nPoints;
       }
       gl.depthMask(true);
