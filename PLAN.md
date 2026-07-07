@@ -305,6 +305,12 @@ substrate from M2.
 - Fill triangulation = **topology fan** (convex rings only — true of DGGS cells,
   country borders, etc.); concave fills later.
 - **Minimal rendering core; UI composed on top** (§3).
+- **Color scales in examples: linear value-based, never rank/percentile**
+  (decided 2026-07-06). Rank equalizes density by construction, so on clustered
+  data (DGGS aspect ratios) it amplifies sub-display-precision float noise into
+  big color jumps — cells that display the same value render differently. Use
+  `finiteRange` from examples/common.js (linear, with a degenerate-span guard);
+  a log/clamped *value* scale is the escape hatch if the low end needs contrast.
 - **Per-feature styling & identity substrate.** Style/identity is keyed by
   **feature** (point/line/polygon), not by "cell". One mechanism — a `featureId`
   vertex attribute + a per-feature style buffer the shader samples by id — serves

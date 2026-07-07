@@ -45,9 +45,7 @@
 
 <script type="module">
 import { Orb } from '../src/orb.js';
-import { viridis, bin } from './common.js';
-
-function bisect(arr, x){ let lo=0, hi=arr.length; while(lo<hi){const m=(lo+hi)>>1; if(arr[m]<x)lo=m+1; else hi=m;} return lo; }
+import { viridis, bin, finiteRange } from './common.js';
 
 const orb = new Orb(document.getElementById('c'), { background:'#ffffff', sphere:'#e0e6ed' });
 // Keyboard rotation (arrows/WASD/QE) is scoped to the focused canvas: focus on load,
@@ -60,13 +58,13 @@ orb.lookAt(180, 25);
 const cache = new Map();
 
 let layer = null, cur = null, flip = false, alpha = 255;
-// Color a feature by its aspect-ratio percentile (viridis); `flip` reverses the
-// ramp (recolor) and `alpha` is the per-feature opacity (fade) — both applied via
-// layer.update() with no re-tessellation.
+// Color a feature by its aspect ratio, linear min→max (value-based, never rank:
+// equal AR ⇒ equal color); `flip` reverses the ramp (recolor) and `alpha` is the
+// per-feature opacity (fade) — both applied via layer.update(), no re-tessellation.
 function paint(i){
   const a = cur.ar[i];
   if(!Number.isFinite(a)) return [68, 68, 68, alpha];
-  const t = bisect(cur.sorted, a) / (cur.sorted.length - 1);
+  const t = (a - cur.range.min) / cur.range.span;
   const c = viridis(flip ? 1 - t : t);
   c[3] = alpha;
   return c;
@@ -79,8 +77,7 @@ async function show(res){
       bin(`ivea7h_r${res}_idx.u32`, Uint32Array),
       bin(`ivea7h_r${res}_ar.f32`, Float32Array),
     ]);
-    const sorted = Float64Array.from([...ar].filter(Number.isFinite)).sort();
-    cache.set(res, { pos, starts, ar, sorted });
+    cache.set(res, { pos, starts, ar, range: finiteRange(ar) });
   }
   cur = cache.get(res); flip = false;
   const t0 = performance.now();
