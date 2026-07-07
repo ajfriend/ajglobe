@@ -599,10 +599,14 @@ export class Orb {
   //   starts       : Uint32Array polyline start indices (len = nLines + 1)
   //   color        : '#rrggbb' | [r,g,b,a]
   //   width        : stroke width in CSS pixels (default 1.5)
-  lines({ xyz, lnglat, starts, color = '#ffffff', width = 1.5 }) {
+  //   lift         : stroke radius above the unit sphere (default 1.0015). Bigger =
+  //                  more depth separation from fills (less z-fighting toward the
+  //                  limb), at the cost of the stroke visibly floating off the
+  //                  surface near the limb. ~1.003–1.004 is a good high-contrast range.
+  lines({ xyz, lnglat, starts, color = '#ffffff', width = 1.5, lift = 1.0015 }) {
     const gl = this.gl;
     const nLines = starts.length - 1;
-    const R = 1.0015;                            // lift above the fills
+    const R = lift;                              // lift above the fills
     const MAX_SEG = 0.05;                         // rad; densify long edges into arcs
     const vec = (i) => this._posAt(xyz, lnglat, i);
 
@@ -728,7 +732,7 @@ export class Orb {
     return this._neLines({ file: 'admin_0_countries', color: '#c2185b', width: 1.2, stitch: true, ...opts });
   }
 
-  async _neLines({ file, detail = '50m', color, width, baseUrl, stitch }) {
+  async _neLines({ file, detail = '50m', color, width, baseUrl, stitch, lift }) {
     const url = `${baseUrl || DEFAULT_NE}/ne_${detail}_${file}.geojson`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`ajglobe: failed to load ${url} (${res.status})`);
@@ -738,7 +742,7 @@ export class Orb {
       catch (e) { console.warn('ajglobe: geoStitch unavailable, drawing raw polygons —', e.message); }
     }
     const { lnglat, starts } = geojsonLines(gj);
-    return this.lines({ lnglat, starts, color, width });
+    return this.lines({ lnglat, starts, color, width, lift });
   }
 
   lookAt(lng, lat) { this.cam.lookAt(lng, lat); }
