@@ -1,6 +1,6 @@
 # Complement polygons with holes: the one shape ajglobe couldn't fill
 
-*2026-07-07 · status: **RESOLVED — implemented.** AJ's ruling: "I don't want to
+*2026-07-07 · status: **RESOLVED — implemented.** The ruling: "I don't want to
 second-guess the input. I want to respect the input we're given." Winding is
 now trusted everywhere (outer rings are never normalized; hole rings are
 oriented only to their role), and complement-with-holes is implemented — via a

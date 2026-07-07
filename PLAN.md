@@ -377,7 +377,7 @@ substrate from M2.
   docs/complement-polygons-with-holes.md). Orientation is semantic on a
   sphere — both sides of a loop are bounded, so winding is the only bit that
   says which region a ring means ("the plane lets you validate winding; the
-  sphere only lets you obey it"). Decision (AJ): respect the input — outer
+  sphere only lets you obey it"). Decision: respect the input — outer
   winding is never normalized; sloppy planar exports are the data layer's
   problem. *The why, permanently:* plotting loop-orientation semantics is a
   founding use case of this library (cells_to_poly demonstrates that a loop
