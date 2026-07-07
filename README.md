@@ -21,10 +21,11 @@ The technical bet: **never parameterize to 2D.**
 - The back hemisphere is hidden by an opaque depth sphere, which also gives a
   solid globe and removes see-through gaps.
 
-Just as important, the result is a **GPU 3D scene, not a 2D projection**: one
-`lng→xyz` per vertex, index-fan fills, depth-composited. That's what holds
-60 FPS at DGGS scale — 1.18M cells / 7M vertices — with true depth, a solid
-globe, and GPU picking.
+Just as important, the globe **lives on the GPU as persistent 3D geometry** —
+`lng/lat → xyz` once at build, after which rotating or zooming is a uniform
+update, not a redraw: no per-frame reprojection, clipping, or path generation.
+That's what holds 60 FPS at DGGS scale — 1.18M cells / 7M vertices — with true
+depth, a solid globe, and GPU picking.
 
 Scope is deliberately small (no basemaps, tiles, or labels): draw lots of
 polygons (e.g. DGGS cells) with fills + outlines + color/opacity, draw reference

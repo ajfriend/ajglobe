@@ -10,8 +10,9 @@ loop orientation, globe navigation (gimbal lock / mouse-sync), keyboard controls
 country outlines, great-circle arcs. The technical bet: **never parameterize to
 2D** — vertices are points on the unit sphere, fills triangulate by ring *topology*
 (index fan), lines slerp in xyz, back hemisphere hidden by a depth sphere. That
-gives antimeridian/pole correctness for free, but the real differentiator is a GPU
-3D scene at DGGS scale, not correctness. See PLAN §1.
+gives antimeridian/pole correctness for free, but the real differentiator is that
+the globe lives on the GPU as persistent 3D geometry (rotation = one uniform
+update, no per-frame reprojection) at DGGS scale, not correctness. See PLAN §1.
 
 ## Where things stand
 - **M1 (spike): done** — WebGL2, zero deps, ~460 lines. Verified on ivea7h r6
