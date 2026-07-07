@@ -4,10 +4,14 @@
 architecture, API, roadmap, decisions, gotchas, and dev/test notes.
 
 ## One-line thesis
-Correct, fast orthographic-globe rendering of polygons/lines. Never parameterize
-to 2D — vertices are points on the unit sphere, fills triangulate by ring
-*topology* (index fan), back hemisphere hidden by a depth sphere. So the
-antimeridian and poles are correct *by construction*, no hacks.
+One reusable package for general, fast orthographic-globe rendering (points/lines/
+polygons) — so the same globe-plotting problems don't get re-solved every project:
+loop orientation, globe navigation (gimbal lock / mouse-sync), keyboard controls,
+country outlines, great-circle arcs. The technical bet: **never parameterize to
+2D** — vertices are points on the unit sphere, fills triangulate by ring *topology*
+(index fan), lines slerp in xyz, back hemisphere hidden by a depth sphere. That
+gives antimeridian/pole correctness for free, but the real differentiator is a GPU
+3D scene at DGGS scale, not correctness. See PLAN §1.
 
 ## Where things stand
 - **M1 (spike): done** — WebGL2, zero deps, ~460 lines. Verified on ivea7h r6

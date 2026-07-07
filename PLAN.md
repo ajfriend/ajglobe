@@ -5,24 +5,42 @@ lands. Keep it honest: record decisions and why, not just intentions.
 
 ## 1. What & why
 
-A small JS library for **correct, fast orthographic-globe rendering of polygons
-and lines**, with the antimeridian and the poles handled *by construction*.
+A small JS library for **general, fast orthographic-globe rendering of points,
+lines, and polygons** — GeoJSON-style primitives you can style arbitrarily, with
+cell visualizations, coastlines, country outlines, etc. built *on top*.
 
-The recurring pain: every general mapping lib (d3-geo, deck.gl, …) breaks at the
-±180° seam and at the poles, because somewhere it parameterizes geometry to 2D
-`lng/lat` — to clip, triangulate (earcut), or project — and those are exactly the
-singular places. A polygon on a sphere has no seams.
+**The real motivation: stop re-solving the same globe-plotting problems.** Every
+time I plot on a globe I end up re-litigating the same handful of issues, project
+after project:
+- **Loop orientation.** d3-geo fills spherical polygons by ring winding, so a
+  wrong-wound ring fills the *complement* (the whole globe minus your shape) — the
+  classic "why is everything filled" bug, worst around Antarctica / pole cells.
+- **Globe navigation.** Gimbal lock, or the rotation drifting out of sync with the
+  mouse, or drag that doesn't feel like you're grabbing the sphere.
+- **The same features, re-built each time.** Keyboard rotation. Country outlines.
+  Great-circle arcs. Hover/pick. I've written these more times than I can count.
 
-**The thesis (the one idea everything rests on):** never go to 2D.
+The point of ajglobe is to put all of that in **one reusable package** — solve it
+once, well, and use it again and again.
+
+**The technical bet (the one idea the rendering rests on): never go to 2D.**
 - A vertex is a point on the unit sphere (`lng/lat → xyz`, once).
 - A filled polygon (a DGGS cell, a country, anything) is triangulated by ring
-  **topology** — a fan over vertex indices (`s, j, j+1`), which is coordinate-free
-  — so it is immune to the seam, and a pole *inside* a convex ring is covered like
-  any other interior point.
+  **topology** — a fan over vertex indices (`s, j, j+1`), coordinate-free — and
+  lines densify by slerping unit vectors, never touching `lng/lat`.
 - The back hemisphere is hidden by an opaque depth sphere (also gives a solid
   globe + kills see-through gaps).
 
-Result: antimeridian and pole correctness are *consequences*, not features.
+This buys two things. First, **antimeridian and pole correctness fall out for
+free** — a polygon on a sphere has no seam, and a wrongly-oriented loop can't fill
+the complement because there's no lng/lat winding to get wrong. (This is a real
+d3-geo gotcha, and the reason we still *use* d3-geo's `geoStitch` to un-cut source
+GeoJSON — see §7; d3-geo itself is genuinely spherical, not the strawman.) Second,
+and more importantly, it's a **GPU scene, not a 2D projection**: one `lng→xyz` per
+vertex, index-fan fills, depth-composited — which is what lets it hold 60 FPS at
+DGGS scale (1.18M cells / 7M verts, §2). That performance and the true-3D scene
+(depth, solid globe, GPU picking) are the differentiators over d3's CPU-side
+Canvas/SVG path generation — not correctness at the singularities.
 
 ## 2. Status
 
