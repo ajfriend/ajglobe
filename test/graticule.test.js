@@ -28,9 +28,9 @@ test('smallCircleLines: closed ring of unit points at the given angular radius',
 });
 
 test('smallCircleLines: sampling converges to the geodesic policy at a great circle', () => {
-  // radius 90° IS a great circle: expect ~2π/MAX_SEG (=0.05) segments
+  // radius 90° IS a great circle: expect ~2π/MAX_SEG (=0.02) segments
   const [ring] = polylines(smallCircleLines({ center: [0, 90], radius: 90 }));
-  assert.ok(Math.abs(ring.length - 1 - Math.ceil(2 * Math.PI / 0.05)) <= 1, `segs ${ring.length - 1}`);
+  assert.ok(Math.abs(ring.length - 1 - Math.ceil(2 * Math.PI / 0.02)) <= 1, `segs ${ring.length - 1}`);
   // small circles need fewer samples, scaled by √sin(radius)
   const [small] = polylines(smallCircleLines({ center: [0, 90], radius: 10 }));
   assert.ok(small.length < ring.length / 2, 'small circle samples fewer points');

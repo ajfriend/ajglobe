@@ -120,11 +120,18 @@ void main() { gl_Position = u_mvp * vec4(a_pos, 1.0); }`;
 // component vanishes there (radial ⊥ view) — weakest exactly where z-fighting
 // is worst. The NDC bias displaces nothing and is uniformly effective at every
 // view angle. Size: must exceed the worst chord sag of densified stroke
-// segments below the sphere ((1−cos(MAX_SEG/2)) ≈ 3e-4 world ≈ 6e-5 NDC at the
+// segments below the sphere ((1−cos(MAX_SEG/2)) ≈ 5e-5 world ≈ 1e-5 NDC at the
 // ortho depth scale) plus depth quantization; small enough that the back-
 // hemisphere wraparound it allows (view z > −bias/depthScale ≈ −0.0025) stays
 // sub-pixel at the limb. MAX_SEG lives here so retuning it confronts this bound.
-const MAX_SEG = 0.05;             // rad; lines() densifies longer edges into arcs
+//
+// MAX_SEG sizes the straight screen chords every curve is drawn as. The eye is
+// far more sensitive to sub-pixel wobble on mathematically smooth curves
+// (graticule circles, range rings) than on irregular ones (coastlines): 0.05
+// gave ~3° kinks every ~36 px at zoom 1 and read as aliasing. 0.02 puts chord
+// deviation at ~0.04 px (zoom 1) for ~2.5× the vertices on long-segment
+// curves — trivial against reference-layer sizes.
+const MAX_SEG = 0.02;             // rad; lines() densifies longer edges into arcs
 const DEPTH_BIAS_GLSL = `  gl_Position.z -= 0.0005 * gl_Position.w;`;
 
 const STROKE_VS = `#version 300 es
