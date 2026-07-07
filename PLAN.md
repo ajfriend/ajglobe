@@ -389,13 +389,20 @@ substrate from M2.
   of it.) Hole rings are oriented to their ROLE only (hole-ness comes from
   GeoJSON ring order; given the role, hole winding is redundant). Routing:
   CCW outer → gnomonic ear-clip at the bounding-cap center (Bâdoiu–Clarkson;
-  Eberly hole bridging); CW single ring → complement via antipodal Steiner
-  fan; CW outer + holes → complement-with-holes via a CAP-RING SPLIT (far
-  side: pure cap fan; near side: split circle as CCW outer + loops as holes
-  through the gnomonic path; shared split-ring verts keep the seam
-  crack-free). Over-hemisphere polygons ear-clip ON the sphere with
-  triple-product predicates. O(n²), annotation scale; convex DGGS cells keep
-  the fan fast path.
+  Eberly hole bridging); CW outer, any ring count → complement via a CAP-RING
+  SPLIT (far side: pure cap fan; near side: split circle as CCW outer + the
+  loops as holes through the gnomonic path; shared split-ring verts keep the
+  seam crack-free). *(The earlier antipodal Steiner fan for single CW rings
+  was dropped in release prep: it assumed the complement is star-shaped from
+  the antipode, which concave loops violate.)* Over-hemisphere polygons
+  ear-clip ON the sphere with triple-product predicates. Touching rings (a
+  hole sharing a vertex with its outer — cell unions produce these) work via
+  earClip collapsing the zero-length bridge's consecutive position-duplicates.
+  Degenerate rings (<3 verts) are dropped, never guessed at. One shape stays
+  unsupported and FAILS LOUDLY (console.warn + no fill, detected post-hoc by
+  flipped output triangles, not shape-guessing): a complement whose loops
+  scatter wider than any hemisphere cap. O(n²), annotation scale; convex
+  DGGS cells keep the fan fast path.
 - **geojson() is a layer above the core, not a core primitive** (2026-07-06).
   The core speaks typed arrays + per-feature style callbacks; geojson() walks
   a FeatureCollection and styles from properties (fill, fillOpacity, stroke,
