@@ -60,28 +60,28 @@ function runPoly(coords, label) {
   const tris = triangulatePolygon(P, rings);
 
   // Region area by Gauss-Bonnet, mirroring the implementation's winding
-  // contract: winding is MEANINGFUL — a single ring encloses what's on its
-  // left (CCW = small side, CW = the complement, rendered via a Steiner fan
-  // of n triangles); a multi-ring hemisphere-fitting polygon normalizes to
-  // small-side outer minus holes; an over-hemisphere polygon trusts RHR.
+  // contract: the OUTER ring's winding is trusted as-given (its left side is
+  // the region — CCW = small side, CW = the complement); holes are oriented
+  // to their role, so each subtracts its small side. One formula, all cases.
+  const S = 4 * Math.PI;
+  const outerA = ringArea(P, rings[0]);
+  const region = outerA
+    - rings.slice(1).reduce((s, r) => {
+      const a = ringArea(P, r);
+      return s + Math.min(a, S - a);
+    }, 0);
+
+  const n = rings[rings.length - 1][1] - rings[0][0];
+  const complementSingle = rings.length === 1 && outerA > 2 * Math.PI;
   const c = capCenter(P, rings);
   let worstDot = 2;
   for (const [s, e] of rings) {
     for (let v = s; v < e; v++) worstDot = Math.min(worstDot, vec3.dot(c, at(P, v)));
   }
-  const fits = worstDot > 0.02;
-  const S = 4 * Math.PI;
-  const outerA = ringArea(P, rings[0]);
-  const single = rings.length === 1;
-  const complement = fits && single && outerA > 2 * Math.PI;
-  const region = (!fits || single ? outerA : Math.min(outerA, S - outerA))
-    - rings.slice(1).reduce((s, r) => {
-      const a = ringArea(P, r);
-      return s + (fits ? Math.min(a, S - a) : S - a);
-    }, 0);
-
-  const n = rings[rings.length - 1][1] - rings[0][0];
-  assert.equal(tris.length / 3, complement ? n : n + 2 * (rings.length - 1) - 2,
+  const complementHoles = worstDot > 0.02 && rings.length > 1 && outerA > 2 * Math.PI;
+  // complement-with-holes adds a synthetic split ring, so only bound the count
+  if (complementHoles) assert.ok(tris.length / 3 > n, `${label}: triangle count`);
+  else assert.equal(tris.length / 3, complementSingle ? n : n + 2 * (rings.length - 1) - 2,
     `${label}: triangle count`);
 
   let sum = 0;
@@ -114,6 +114,20 @@ test('winding is meaningful: a CW ring fills the complement of the CCW one', () 
   const cw = [ccw[0].slice().reverse()];
   runPoly(ccw, 'small CCW square');                // ~small region
   runPoly(cw, 'CW square = complement');           // ~4π − small (Steiner fan)
+});
+
+test('complement WITH holes: sphere minus two loops (both rings CW)', () => {
+  const hex = (cx, cy, r) => Array.from({ length: 6 }, (_, k) => {
+    const t = (k / 6) * 2 * Math.PI;
+    return [cx + r * Math.cos(t), cy + r * Math.sin(t)];
+  });
+  // region = everything except two hexes: first ring CW (complement side),
+  // second ring CW too (a hole cut out of that complement) — area 4π − a − b,
+  // validated by the Gauss-Bonnet check inside runPoly
+  runPoly([hex(0, 0, 8).reverse(), hex(40, 10, 6).reverse()], 'sphere minus two hexes');
+  // and with three loops, holes at spread-out positions
+  runPoly([hex(0, 0, 8).reverse(), hex(35, -12, 5).reverse(), hex(-25, 20, 4).reverse()],
+    'sphere minus three hexes');
 });
 
 test('every polygon in the cells_to_poly blog data triangulates validly', () => {

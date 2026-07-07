@@ -151,26 +151,12 @@ function triangulateGnomonic(P, rings, center, out) {
     return cyc;
   });
 
-  // Winding is MEANINGFUL on a sphere (there is no unbounded "outside"): a CCW
-  // outer ring encloses the small side, a CW one encloses the COMPLEMENT — the
-  // convention GeoJSON's right-hand rule implies and d3-geo renders. A single
-  // CW ring therefore fills sphere-minus-loop: fan from the antipode of the cap
-  // center (the complement is star-shaped from there for cap-scale loops) and
-  // let the caller's subdivision cope with the huge triangles. Appends the
-  // antipode as a new vertex in P — callers own the parallel arrays.
+  // The outer ring's winding is TRUSTED (routing in triangulatePolygon sends
+  // only CCW-outer polygons here). Hole rings are oriented to their ROLE: per
+  // GeoJSON, hole-ness comes from ring order (outer first), so given the role
+  // a hole's winding is redundant — flipping a CCW "hole" to CW implements the
+  // role; it never second-guesses which region the polygon means.
   let outer = cycles[0];
-  if (rings.length === 1 && area2(pts, outer) < 0) {
-    const si = P.length / 3;
-    P.push(-center[0], -center[1], -center[2]);
-    for (let i = 0; i < outer.length; i++) {
-      out.push(si, slot.get(outer[i]), slot.get(outer[(i + 1) % outer.length]));
-    }
-    return out;
-  }
-
-  // multi-ring: normalize to outer CCW, holes CW (tolerates sloppy winding —
-  // hole-ness comes from ring order, which GeoJSON fixes as outer-first)
-  if (area2(pts, outer) < 0) outer = outer.slice().reverse();
   const holes = cycles.slice(1).map((h) => (area2(pts, h) > 0 ? h.slice().reverse() : h));
   holes.sort((h1, h2) => Math.max(...h2.map((i) => pts[i * 2])) - Math.max(...h1.map((i) => pts[i * 2])));
   for (const h of holes) outer = bridgeHole2(pts, outer, h);
@@ -179,6 +165,47 @@ function triangulateGnomonic(P, rings, center, out) {
   earClip((a, b, c) => cross2(pts, a, b, c), (p, a, b, c) => pointInTri2(pts, p, a, b, c), outer, tris);
   for (const t of tris) out.push(slot.get(t));
   return out;
+}
+
+// Complement of a single loop ("sphere minus this loop"; the ring arrives CW
+// around its small side, i.e. CCW around the region): fan from the antipode of
+// the cap center — the complement is star-shaped from there for cap-scale
+// loops — and let the caller's subdivision cope with the huge triangles.
+// Appends the antipode to P; callers own the parallel arrays.
+function complementFan(P, [s, e], center, out) {
+  const si = P.length / 3;
+  P.push(-center[0], -center[1], -center[2]);
+  for (let v = s; v < e; v++) out.push(si, v, v === e - 1 ? s : v + 1);
+  return out;
+}
+
+// Complement WITH holes ("sphere minus all these loops", every ring CW around
+// its own small side): no single fan works (the far side is fine, but the
+// loops punch holes in it), and ear clipping can't start on the loop
+// boundaries (every corner is reflex from the region's side). Instead, split
+// the sphere at a circle midway between the loops' bounding cap and the
+// hemisphere limit:
+//   - far side: a pure spherical cap around the antipode — fan, no holes;
+//   - near side: an ordinary hemisphere-fitting polygon — the split circle as
+//     its CCW outer ring, the given loops as its holes — the gnomonic path.
+// Both sides index the SAME split-ring vertices, so the caller's subdivision
+// splits the shared edges identically and the seam stays crack-free (the
+// subdivideTri shared-edge argument).
+function complementWithHoles(P, rings, center, worst, out) {
+  const th = (Math.acos(worst) + Math.PI / 2) / 2;      // split-circle radius
+  const q = quat.fromUnitVectors([0, 0, 1], center);
+  const segs = Math.max(16, Math.ceil((2 * Math.PI) * Math.sin(th) / 0.09));
+  const ring0 = P.length / 3;
+  const ct = Math.cos(th), st = Math.sin(th);
+  for (let i = 0; i < segs; i++) {
+    const t = (i / segs) * 2 * Math.PI;
+    P.push(...quat.rotateVec3(q, [st * Math.cos(t), st * Math.sin(t), ct]));
+  }
+  const si = P.length / 3;                              // far side: fan the cap
+  P.push(-center[0], -center[1], -center[2]);
+  for (let i = 0; i < segs; i++) out.push(si, ring0 + ((i + 1) % segs), ring0 + i);
+  // near side: split ring (CCW in the gnomonic frame) + the loops as holes
+  return triangulateGnomonic(P, [[ring0, ring0 + segs], ...rings], center, out);
 }
 
 // ---- path 2: spherical predicates (any size; trusts RHR winding) -----------
@@ -282,11 +309,30 @@ export function capCenter(P, rings) {   // exported for the unit tests
   return c;
 }
 
+// signed-area sign of one ring in the gnomonic frame at `center`:
+// > 0 = CCW = the ring encloses its small side; < 0 = CW = the complement
+function ringCCW(P, [s, e], center) {
+  const q = quat.fromUnitVectors(center, [0, 0, 1]);
+  const pts = [];
+  for (let v = s; v < e; v++) {
+    const r = quat.rotateVec3(q, [P[v * 3], P[v * 3 + 1], P[v * 3 + 2]]);
+    pts.push(r[0] / r[2], r[1] / r[2]);
+  }
+  return area2(pts, Array.from({ length: e - s }, (_, i) => i)) > 0;
+}
+
 // Triangulate one spherical polygon. P: flat unit-xyz PLAIN ARRAY — the
-// complement path appends a Steiner vertex, so callers must own any parallel
+// complement paths append Steiner vertices, so callers must own any parallel
 // arrays; rings: array of [start, end) vertex-index ranges (outer first, then
 // holes; open rings — no repeated closing point). Appends vertex-index triples
 // to `out` and returns it.
+//
+// The outer ring's winding is RESPECTED, never repaired: on a sphere both
+// sides of a loop are bounded, so winding is the only bit that says which
+// region a ring means — CCW encloses its small side, CW the complement. There
+// is nothing to validate it against ("the plane lets you validate winding; the
+// sphere only lets you obey it"). Sloppily wound planar exports are the data
+// layer's problem, by design.
 export function triangulatePolygon(P, rings, out = []) {
   const c = capCenter(P, rings);
   let worst = 2;
@@ -295,6 +341,10 @@ export function triangulatePolygon(P, rings, out = []) {
       worst = Math.min(worst, c[0] * P[v * 3] + c[1] * P[v * 3 + 1] + c[2] * P[v * 3 + 2]);
     }
   }
-  // fits comfortably in the open hemisphere (>~1.1° margin)? project; else sphere
-  return worst > 0.02 ? triangulateGnomonic(P, rings, c, out) : triangulateSpherical(P, rings, out);
+  // vertices don't fit an open hemisphere (>~1.1° margin): spherical predicates
+  if (worst <= 0.02) return triangulateSpherical(P, rings, out);
+  if (ringCCW(P, rings[0], c)) return triangulateGnomonic(P, rings, c, out);
+  return rings.length === 1
+    ? complementFan(P, rings[0], c, out)
+    : complementWithHoles(P, rings, c, worst, out);
 }

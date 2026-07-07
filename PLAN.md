@@ -372,18 +372,23 @@ substrate from M2.
   range/distance ring set is one call. Perfectly-round small circles at extreme
   zoom would need vertex-shader evaluation — same deferred trade as dynamic-LOD
   geodesics (§7 geodesic-path substrate).
-- **Concave/holed polygons: ear-clip in src/tess.js, two paths; winding is
-  meaningful** (2026-07-06, M7). Hemisphere-fitting polygons gnomonic-project
-  onto the tangent plane at their bounding-cap center (Bâdoiu–Clarkson) and
-  ear-clip in 2D (Eberly hole bridging; winding normalized for multi-ring).
-  Over-hemisphere polygons (pole-enclosing, antipodal points — no projection
-  center exists) ear-clip ON the sphere with triple-product predicates, trusting
-  GeoJSON RHR winding. A single CW ring fills the COMPLEMENT (sphere minus
-  loop) via a Steiner fan from the cap-center antipode — orientation is
-  semantic on a sphere (there is no unbounded outside; this is what d3-geo
-  renders and what the cells_to_poly figures teach). O(n²), annotation scale;
-  convex DGGS cells keep the fan fast path. *Unsupported:* complement polygons
-  WITH holes (CW outer + rings); non-star complements of wild shapes.
+- **Concave/holed polygons: ear-clip in src/tess.js; winding is TRUSTED,
+  never repaired** (2026-07-06/07, M7; full analysis in
+  docs/complement-polygons-with-holes.md). Orientation is semantic on a
+  sphere — both sides of a loop are bounded, so winding is the only bit that
+  says which region a ring means ("the plane lets you validate winding; the
+  sphere only lets you obey it"). Decision (AJ): respect the input — outer
+  winding is never normalized; sloppy planar exports are the data layer's
+  problem. Hole rings are oriented to their ROLE only (hole-ness comes from
+  GeoJSON ring order; given the role, hole winding is redundant). Routing:
+  CCW outer → gnomonic ear-clip at the bounding-cap center (Bâdoiu–Clarkson;
+  Eberly hole bridging); CW single ring → complement via antipodal Steiner
+  fan; CW outer + holes → complement-with-holes via a CAP-RING SPLIT (far
+  side: pure cap fan; near side: split circle as CCW outer + loops as holes
+  through the gnomonic path; shared split-ring verts keep the seam
+  crack-free). Over-hemisphere polygons ear-clip ON the sphere with
+  triple-product predicates. O(n²), annotation scale; convex DGGS cells keep
+  the fan fast path.
 - **geojson() is a layer above the core, not a core primitive** (2026-07-06).
   The core speaks typed arrays + per-feature style callbacks; geojson() walks
   a FeatureCollection and styles from properties (fill, fillOpacity, stroke,

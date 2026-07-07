@@ -1,8 +1,12 @@
-# Complement polygons with holes: the one shape ajglobe can't fill
+# Complement polygons with holes: the one shape ajglobe couldn't fill
 
-*2026-07-07 · status: open question — decide whether to implement (see §7).
-Companion to PLAN §7 "Concave/holed polygons"; written after the cells_to_poly
-port surfaced the gap.*
+*2026-07-07 · status: **RESOLVED — implemented.** AJ's ruling: "I don't want to
+second-guess the input. I want to respect the input we're given." Winding is
+now trusted everywhere (outer rings are never normalized; hole rings are
+oriented only to their role), and complement-with-holes is implemented — via a
+cap-ring split rather than §6's Steiner-fan sketch, which turned out to have an
+ear-scarcity flaw (see the addendum, §8). §§1–7 are kept as written, as the
+record of the analysis.*
 
 ## 1. The one-sentence version
 
@@ -137,3 +141,36 @@ If deferred instead, the minimum honest action is the warn-and-normalize
 detector (~5 lines), so the silent failure becomes a loud one. What should
 not survive this doc is the status quo: silently rendering the opposite
 region of what the winding asked for.
+
+## 8. Addendum: what actually shipped (2026-07-07)
+
+The decision went further than §7's recommendation: **all winding
+normalization on outer rings was removed**, not just the complement case
+closed. `triangulatePolygon` now reads the first ring's winding (gnomonic
+signed-area sign when the polygon fits a hemisphere; trusted as-given
+otherwise) and routes:
+
+- CCW outer → gnomonic path (holes oriented to their role — hole-ness comes
+  from GeoJSON ring order, so given the role a hole's winding is redundant;
+  flipping it enforces the role, it never re-chooses the region).
+- CW single ring → antipodal fan (unchanged).
+- CW outer + holes → **cap-ring split**, not the §6 Steiner fan. During
+  implementation the fan idea hit an ear-scarcity flaw: after bridging holes
+  into a tiny antipodal outer, *every* boundary corner except the bridge
+  junctions is reflex from the region's side, junction ears are huge and
+  usually contain other vertices, and ear clipping stalls into the fallback.
+  Instead, split the sphere at a circle midway between the loops' bounding
+  cap and the hemisphere limit: the far side is a pure cap (fan from the
+  antipode, no holes); the near side is an ordinary hemisphere-fitting
+  polygon — split circle as CCW outer, the given loops as holes — handled by
+  the existing gnomonic path. Both sides share the split ring's vertices, so
+  subdivision keeps the seam crack-free (the shared-edge argument from
+  subdivideTri).
+
+Tests: sphere-minus-two-hexes and sphere-minus-three-hexes validate by
+Gauss-Bonnet (region = 4π − Σ loops); the validator now uses one uniform
+formula for every case — trusted outer, role-oriented holes — which is
+itself the evidence that the semantics became total. The consequence for
+sloppy planar exports (shapefile CW exteriors et al.) is accepted and
+intentional: normalize your data before handing it to the renderer; the
+renderer will believe you.
