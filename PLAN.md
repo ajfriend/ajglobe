@@ -262,8 +262,9 @@ substrate from M2.
       (`pick`/`on('hover')`), back hemisphere hidden, recolor, z-order over fills/
       strokes/coastlines, `glError 0`. Demo: `cities` toggle in `reference-detail.html`.
 - [ ] **Later:** time-normalized momentum (opt-in), concave polygon fills
-      (spherical ear-clip), perspective/deep zoom, reuse the 3D core for 2D map
-      projections, publish to npm
+      (spherical ear-clip), reuse the 3D core for 2D map projections, publish
+      to npm, depth-disk occluder (§7). *(Perspective/deep zoom dropped
+      2026-07-06 — see §7.)*
 
 ## 7. Decisions log
 
@@ -301,7 +302,20 @@ substrate from M2.
   polar splits) — `package.json` stays zero-dep, nothing in `dist/`, and only
   callers of stitched `borders()` pay for it (`stitch:false`/`stitch:fn` to opt out).
 - v1 must-haves: fills, thick AA strokes, solid background sphere, hover picking,
-  reference outlines (**coastlines + country borders**). **Orthographic only** for v1.
+  reference outlines (**coastlines + country borders**). **Orthographic only —
+  permanently** (2026-07-06; was "for v1"). Perspective/deep zoom was a
+  speculative nice-to-have from the original brainstorm; nothing in the thesis
+  or any use case needs it, and dropping it unlocks a real simplification:
+  - **Depth-disk occluder (noted, not yet done).** In ortho, the visible/hidden
+    boundary is exactly the screen-parallel plane through the origin, so the
+    0.998 depth sphere can become an opaque unit *disk* in that plane (drawn in
+    view space, projection-only). Kills the 0.998 radius constant, and the
+    fill-sag/occlusion constraint vanishes by convexity (chords of front-
+    hemisphere points keep z > 0; fill-to-disk depth gap is √(1−d²) ≈ 0.06 even
+    one pixel from the limb). Subdivision then only needs to densify coarse
+    *boundary* edges for curvature — no interior lattice, no spoke gate. Cost:
+    the occluder becomes view-dependent (a special case vs. "one static scene"),
+    and it hard-commits to ortho — acceptable now that ortho is permanent.
 - Fill triangulation = **topology fan** (convex rings only — true of DGGS cells,
   country borders, etc.); concave fills later.
 - **Minimal rendering core; UI composed on top** (§3).
