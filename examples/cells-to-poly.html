@@ -11,6 +11,7 @@
   a{color:#3273dc}
   .fig{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:1rem;margin:1.6rem 0 .4rem;}
   .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:0 1rem;max-width:800px;margin:1.6rem auto .4rem;justify-items:center;}
+  @media (max-width:600px){.grid2{grid-template-columns:1fr;gap:1rem;}}  /* phones: stack the 2x2 */
   .globe{position:relative;}
   /* clip to the boundary circle: strokes are screen-space quads (half-width +
      1px AA pad), so limb-touching lines bleed a few px past the horizon — d3
@@ -161,7 +162,11 @@ let syncHome = null;                                    // first synced globe wi
 
 async function globe(id, name, { size, arrowStep = 0, sync = true }) {
   const holder = document.getElementById(id);
-  holder.style.width = holder.style.height = `${size}px`;
+  // size is the DESKTOP size; cap at the container so phones don't squash the
+  // box (a flex item shrinks width but not height -> oval ring). aspect-ratio
+  // keeps it square at any width; the Orb's ResizeObserver handles the rest.
+  holder.style.width = `min(${size}px, 100%)`;
+  holder.style.aspectRatio = '1';
   const canvas = document.createElement('canvas');
   holder.appendChild(canvas);
   holder.insertAdjacentHTML('beforeend', '<div class="ring"></div>');
