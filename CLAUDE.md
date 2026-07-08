@@ -35,16 +35,17 @@ regenerate from scratch see PLAN §9 (skar_py gen scripts).
 - Headless benchmarking is finicky — use the detached-spin trick in PLAN §8.
 
 ## Verification policy (headless browser is expensive — use sparingly)
-- **Default: unit tests (`node --test`) + push; AJ checks the live page.** That
-  covers example/view tweaks, styling, layout, copy. AJ tests on his phone (the
-  real target, which headless can't emulate) and judges look/feel himself.
+- **Default: unit tests (`node --test`) + push; the user checks the live page.**
+  That covers example/view tweaks, styling, layout, copy. Look, feel, and real
+  phone behavior (the actual target, which headless can't emulate) are checked
+  by hand.
 - **Reach for puppeteer only when the risk is browser-API integration** — new
   event-handling paths, WebGL changes, resize/observer behavior — i.e. when
   `node --test` could pass while a real browser breaks. (Track record: it caught
   exactly one bug this way — a `setPointerCapture` throw that silently killed
-  multi-finger tracking — and nothing that AJ's own eyes wouldn't have.)
+  multi-finger tracking.)
 - When you do use it: one targeted `evaluate` returning JSON asserts, not
   screenshot loops — screenshots are the expensive part.
 - Note: the Pages CDN (custom domain) caches up to 4h and the purge can lag a
-  deploy by minutes — verify live content by grepping served bytes, and tell AJ
-  to use a private tab when retesting on his phone.
+  deploy by minutes — verify live content by grepping served bytes, and suggest
+  a private tab for retesting on a phone.
