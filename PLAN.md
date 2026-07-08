@@ -148,9 +148,10 @@ orb.points({ lnglat|xyz, color, size });           // round disc markers (per-fe
 orb.polygons({ ..., polys });      // ring-grouped: concave polygons + holes (tess.js; annotation scale)
 orb.geojson(gj, defaults?);        // FeatureCollection styled from properties (fill/stroke/…); -> {layers, remove}
 orb.lines({ ..., dash: [on, off] });  // dashed strokes (CSS px along the arc)
-new Orb(canvas, { interaction: { drag?, wheel?, keys?, cooperative? } });  // gate user input; cooperative =
+new Orb(canvas, { interaction: { drag?, wheel?, keys?, cooperative?, zoom? } });  // gate user input; cooperative =
                                    // embedded-map gestures: 1 finger / plain wheel stay the page's,
-                                   // 2 fingers or ctrl/cmd+wheel move the globe (pinch always works)
+                                   // 2 fingers or ctrl/cmd+wheel move the globe (pinch always works);
+                                   // zoom:false locks framing (2 fingers still rotate; setView still zooms)
 orb.lookAt(lng, lat);              // center a point, north up
 orb.getView();                     // -> {q, zoom}   exact, fast view
 orb.setView({ q?, zoom? });        // apply a view; idempotent (echo no-ops)
@@ -335,6 +336,11 @@ substrate from M2.
   - [x] gesture unit tests via a dispatching stub canvas (no jsdom): pinch
         ratio/clamps, midpoint≈mouse-drag, 2→1 handoff no-jump, third-finger,
         cooperative gating, hint semantics (cancel hints, tap doesn't).
+  - [x] `interaction: { zoom: false }` (phone feedback round 2: framed embeds
+        want rotation, not zoom): pinch spread ignored — two fingers still
+        rotate — and the wheel listener never attaches (ctrl+scroll stays the
+        page's, no zoom hint). setView({zoom}) unaffected. cells-to-poly runs
+        cooperative + zoom:false, restoring its zoom-locked ring framing.
 - [ ] **Later:** time-normalized momentum (opt-in), reuse the 3D core for 2D
       map projections, publish to npm. *(Depth-disk occluder: done, §7.
       Concave fills: done, M7. Perspective/deep zoom dropped 2026-07-06 — §7.)*

@@ -22,8 +22,8 @@
   .globe canvas:focus{outline:none;}
   /* the globe outline circle (Plot.sphere in the original): the orbs run at
      zoom MARGIN (the camera framing constant), so the globe exactly fills the box
-     and the circle hugs the edge. Pinch / ctrl+wheel can now zoom away from that
-     framing; double-click/tap resets it. */
+     and the circle hugs the edge — valid because zoom is locked (interaction
+     zoom:false; user gestures rotate only) */
   .globe .ring{position:absolute;inset:1px;border:2px solid #111;
     border-radius:50%;pointer-events:none;}
   /* cooperative-gesture hint (the "use two fingers" toast): app chrome, shown on
@@ -44,7 +44,8 @@
 per-feature styling from <code>properties</code>, concave polygons with holes, dashed
 outlines, and a polygon larger than a hemisphere. Drag to rotate (the intro pair and
 the 2×2 grid stay in sync); double-click to reset. Gestures are cooperative, like an
-embedded map: scrolling passes through — two fingers (or ⌘/Ctrl + scroll) move a globe.</p>
+embedded map: scrolling passes through — two fingers rotate a globe (zoom is locked
+to the framing, like the originals).</p>
 
 <div class="fig">
   <div class="globe" id="g-intro-cells"></div>
@@ -167,17 +168,21 @@ async function globe(id, name, { size, arrowStep = 0, sync = true }) {
 
   const orb = new Orb(canvas, {
     background: '#ffffff', sphere: '#ffffff',
-    // cooperative = the embedded-map pattern: one finger / plain wheel stay the
-    // page's (scroll passes through); two fingers or ctrl/cmd+wheel move the globe.
-    interaction: { cooperative: true },
+    // cooperative = the embedded-map pattern: one finger stays the page's (scroll
+    // passes through); two fingers rotate the globe. zoom:false locks the framing
+    // (like the blog originals) — the pinch spread is ignored and every wheel
+    // scroll, ctrl or not, belongs to the page.
+    interaction: { cooperative: true, zoom: false },
   });
   // The hint toast: the library emits gesturehint when it passes an input to the
   // page; showing/fading it is app chrome (PLAN §3). Re-emits just reset the timer.
+  // (kind:'wheel' can't fire here — zoom:false detaches the wheel listener — but
+  // the handler stays generic in case zoom is ever re-enabled.)
   holder.insertAdjacentHTML('beforeend', '<div class="hint"></div>');
   const hintEl = holder.lastElementChild;
   let hintT;
   orb.on('gesturehint', ({ kind }) => {
-    hintEl.textContent = kind === 'wheel' ? 'Use ⌘/Ctrl + scroll to zoom' : 'Use two fingers to move the globe';
+    hintEl.textContent = kind === 'wheel' ? 'Use ⌘/Ctrl + scroll to zoom' : 'Use two fingers to rotate the globe';
     hintEl.classList.add('show');
     clearTimeout(hintT);
     hintT = setTimeout(() => hintEl.classList.remove('show'), 1600);
@@ -219,7 +224,7 @@ await Promise.all([
   globe('g-holes-0', 'holes_0', { size: 390, arrowStep: 3 }),
   globe('g-cross', 'cross', { size: 600, arrowStep: 3, sync: false }),
 ]);
-window.ready = true;                                    // headless test hook
+window.ready = true; window.orbs = syncOrbs;            // headless test hooks
 </script>
 </body>
 </html>

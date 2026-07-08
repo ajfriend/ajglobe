@@ -32,10 +32,13 @@ export class Camera {
    * @param {HTMLCanvasElement} canvas
    * @param {() => void} onChange  redraw callback
    * @param {AbortSignal} signal   detaches every listener on abort
-   * @param {{drag?: boolean, wheel?: boolean, keys?: boolean, cooperative?: boolean}} [interaction]
+   * @param {{drag?: boolean, wheel?: boolean, keys?: boolean, cooperative?: boolean, zoom?: boolean}} [interaction]
    *        cooperative: the embedded-map pattern — a single finger pans the PAGE
    *        and a plain wheel scrolls it; two fingers or ctrl/cmd+wheel move the
    *        globe. Mouse/pen drag is unaffected.
+   *        zoom:false locks the zoom (fixed-framing embeds): the pinch spread is
+   *        ignored — two fingers still ROTATE — and no wheel listener attaches,
+   *        so every scroll stays the page's. setView({zoom}) still works.
    * @param {(type: string, detail: object) => void} [emit]  event channel for
    *        'gesturehint' ({kind:'touch'|'wheel'}) — fired when cooperative mode
    *        passes an input to the page, so app code can show a "use two
@@ -54,7 +57,7 @@ export class Camera {
     // often want wheel OFF so the page keeps its scroll, while drag still works;
     // cooperative goes further (see the JSDoc above).
     // getView/setView/lookAt always work regardless — this only gates user input.
-    this._attach(signal, { drag: true, wheel: true, keys: true, cooperative: false, ...interaction });
+    this._attach(signal, { drag: true, wheel: true, keys: true, cooperative: false, zoom: true, ...interaction });
   }
 
   // Orthographic half-height in world units: globe radius 1 + the MARGIN,
@@ -101,7 +104,7 @@ export class Camera {
     }
   }
 
-  _attach(signal, { drag, wheel, keys, cooperative }) {
+  _attach(signal, { drag, wheel, keys, cooperative, zoom }) {
     const c = this.canvas;
     if (drag) {
       // The library owns touch-action (input plumbing on its own canvas, not
@@ -137,8 +140,8 @@ export class Camera {
           const delta = quat.fromUnitVectors(this._ref.v, this._ball((a.x + b.x) / 2, (a.y + b.y) / 2));
           this.q = quat.normalize(quat.multiply(delta, this.q));
           const dist = Math.hypot(b.x - a.x, b.y - a.y);
-          if (dist > 0 && this._ref.dist > 0) this._zoomBy(dist / this._ref.dist);
-          else this.onChange();                  // coincident fingers: 0/0 zoom would poison the view with NaN
+          if (zoom && dist > 0 && this._ref.dist > 0) this._zoomBy(dist / this._ref.dist);
+          else this.onChange();                  // zoom locked, or coincident fingers (0/0 -> NaN would poison the view)
           this._ref = { v: this._ball((a.x + b.x) / 2, (a.y + b.y) / 2), dist };
         } else {
           // Track the previous ball vector so each move is an INCREMENTAL
@@ -176,7 +179,9 @@ export class Camera {
         if (e.touches.length >= 2) e.preventDefault();
       }, { passive: false, signal });
     }
-    if (wheel) {
+    // zoom:false skips the wheel listener entirely: no zoom, no preventDefault,
+    // no "ctrl+scroll" hint — every scroll (ctrl or not) is the page's.
+    if (wheel && zoom) {
       c.addEventListener('wheel', (e) => {
         if (cooperative && !e.ctrlKey && !e.metaKey) {
           // The page keeps plain scroll; hint how to zoom. No throttle here —

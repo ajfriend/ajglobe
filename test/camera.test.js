@@ -270,3 +270,33 @@ test('cooperative touchmove preventDefaults only multi-finger gestures', () => {
   c.dispatch('touchmove', one);
   assert.equal(one.defaulted, undefined, '1 touch: the page scrolls');
 });
+
+test('zoom:false locks zoom but keeps two-finger rotation', () => {
+  const { cam, c } = gestureCam({ zoom: false });
+  const q0 = cam.q;
+  c.dispatch('pointerdown', touch(1, 300, 280));
+  c.dispatch('pointerdown', touch(2, 500, 320));
+  c.dispatch('pointermove', touch(1, 150, 240));   // translate AND spread
+  c.dispatch('pointermove', touch(2, 450, 300));
+  assert.equal(cam.zoom, 1, 'pinch spread must not zoom');
+  assert.notEqual(cam.q, q0, 'two fingers must still rotate');
+});
+
+test('zoom:false detaches the wheel listener (no zoom, no preventDefault, no hint)', () => {
+  for (const interaction of [{ zoom: false }, { cooperative: true, zoom: false }]) {
+    const { cam, c, hints } = gestureCam(interaction);
+    const plain = { deltaY: -100 }, ctrl = { deltaY: -100, ctrlKey: true };
+    c.dispatch('wheel', plain);
+    c.dispatch('wheel', ctrl);
+    assert.equal(cam.zoom, 1);
+    assert.equal(plain.defaulted, undefined);
+    assert.equal(ctrl.defaulted, undefined, 'ctrl+wheel is the page\'s too');
+    assert.deepEqual(hints, [], 'no ctrl+scroll hint when zoom is locked');
+  }
+});
+
+test('zoom:false still allows setView zoom (only user gestures are locked)', () => {
+  const { cam } = gestureCam({ zoom: false });
+  cam.setView({ zoom: 3 });
+  assert.equal(cam.zoom, 3);
+});

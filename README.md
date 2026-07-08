@@ -57,8 +57,13 @@ the *page* and a plain wheel scrolls it; two fingers or `⌘`/`Ctrl`+wheel move 
 globe (desktop trackpad pinches arrive as ctrl-wheel, so they zoom too). When an
 input is passed to the page, the orb emits `gesturehint`
 (`{ kind: 'touch' | 'wheel' }`) so app code can show a "use two fingers" /
-"ctrl+scroll to zoom" toast — see `examples/cells-to-poly.html`. The individual
-gates `{ drag, wheel, keys }` still work for switching inputs off entirely.
+"ctrl+scroll to zoom" toast — see `examples/cells-to-poly.html`.
+
+`interaction: { zoom: false }` locks the zoom for fixed-framing embeds: the
+pinch spread is ignored (two fingers still *rotate*) and no wheel listener
+attaches, so every scroll — ctrl or not — stays the page's. `setView({ zoom })`
+still works; only user gestures are locked. The other gates
+`{ drag, wheel, keys }` switch inputs off entirely.
 
 ## Install / Use
 
@@ -189,9 +194,9 @@ pass as above (edit its `NAMES`).
 their GeoJSON via `orb.geojson(data)` — per-feature styling from `properties`
 (fill/stroke/opacity/dashes), concave polygons with holes, winding-aware fills
 (a CW loop fills the complement of the sphere), synced rotation, and cooperative
-gestures (`interaction: { cooperative: true }`) so the page keeps its scroll —
-two fingers or `⌘`/`Ctrl`+wheel move a globe, with a hint toast built on the
-`gesturehint` event.
+gestures with the zoom locked (`interaction: { cooperative: true, zoom: false }`)
+so the page keeps its scroll and the globes keep their framing — two fingers
+rotate a globe, with a hint toast built on the `gesturehint` event.
 
 ## Develop
 
