@@ -425,13 +425,17 @@ export class Orb {
     this.layers = [];
     this.lineLayers = [];
     this.pointLayers = [];
-    this._handlers = { hover: [], click: [], viewchange: [] };
+    this._handlers = {};   // event buckets are created lazily by on() — see there for the event list
     // One AbortController removes every canvas listener (Orb's + Camera's) on destroy().
     this._destroyed = false;
     this._abort = new AbortController();
     const signal = this._abort.signal;
-    this.cam = new Camera(canvas, () => { this._invalidate(); this._emit('viewchange'); }, signal,
-                          opts.interaction, (type, e) => this._emit(type, e));
+    // The camera's single notify channel feeds the orb emitter; redraw-on-
+    // viewchange is Orb policy, not something the camera knows about.
+    this.cam = new Camera(canvas, (type, e) => {
+      if (type === 'viewchange') this._invalidate();
+      this._emit(type, e);
+    }, signal, opts.interaction);
     this._dirty = true;
     // Hover/click are single-cursor concepts: ignore secondary fingers, which
     // would otherwise jitter hover and clobber downAt during a pinch.
@@ -1011,11 +1015,12 @@ export class Orb {
   project(lng, lat) { return this.cam.project(lng, lat); }
   unproject(x, y) { return this.cam.unproject(x, y); }
 
-  // on('hover'|'click'|'viewchange', cb) -> unsubscribe fn.
+  // on('hover'|'click'|'viewchange'|'gesturehint', cb) -> unsubscribe fn.
   // hover/click payload: { x, y, lng, lat, index, layer } — lng/lat null off-globe;
   // index/layer come from GPU picking (null off-globe / over no feature). They're
   // lazy getters: a handler that reads only lng/lat triggers no pick (no GPU
-  // readback). viewchange: no arg.
+  // readback). viewchange: no arg. gesturehint: { kind: 'touch'|'wheel' }, fired
+  // when cooperative mode passes an input to the page.
   on(type, cb) {
     (this._handlers[type] ||= []).push(cb);
     return () => { this._handlers[type] = this._handlers[type].filter((f) => f !== cb); };

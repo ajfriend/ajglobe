@@ -16,12 +16,12 @@ function stubCanvas(w = 800, h = 600) {
     addEventListener(type, fn) { (L[type] ||= []).push(fn); },
     setPointerCapture() {},
     dispatch(type, e = {}) {
-      for (const fn of L[type] || []) fn({ type, pointerType: 'mouse', isPrimary: true, preventDefault() { e.defaulted = true; }, ...e });
+      for (const fn of L[type] || []) fn({ type, pointerType: 'mouse', preventDefault() { e.defaulted = true; }, ...e });
     },
   };
 }
 const newCam = () => new Camera(stubCanvas(), () => {}, new AbortController().signal);
-// Camera with a call-counting onChange, to assert when a change does/doesn't commit.
+// Camera with a call-counting notify, to assert when a change does/doesn't commit.
 function countingCam() {
   const calls = { n: 0 };
   const cam = new Camera(stubCanvas(), () => { calls.n++; }, new AbortController().signal);
@@ -30,11 +30,13 @@ function countingCam() {
 // Camera wired for gesture tests: exposes its stub canvas and collects hints.
 function gestureCam(interaction) {
   const c = stubCanvas(), hints = [];
-  const cam = new Camera(c, () => {}, new AbortController().signal, interaction,
-                         (type, e) => hints.push({ type, ...e }));
+  const cam = new Camera(c, (type, e) => { if (type === 'gesturehint') hints.push({ type, ...e }); },
+                         new AbortController().signal, interaction);
   return { cam, c, hints };
 }
-const touch = (id, x, y) => ({ pointerId: id, pointerType: 'touch', offsetX: x, offsetY: y, isPrimary: id === 1 });
+const touch = (id, x, y) => ({ pointerId: id, pointerType: 'touch', offsetX: x, offsetY: y });
+// Quaternion similarity: |q1.q2| ~ 1 means same rotation (q and -q are the same).
+const qdot = (a, b) => Math.abs(a.reduce((s, v, i) => s + v * b[i], 0));
 
 test('project ∘ unproject roundtrips on the front hemisphere', () => {
   const cam = newCam();
@@ -165,8 +167,7 @@ test('two-finger translate rotates like the equivalent single drag of the midpoi
   one.c.dispatch('pointerdown', { pointerId: 9, offsetX: 400, offsetY: 300 });
   one.c.dispatch('pointermove', { pointerId: 9, offsetX: 420, offsetY: 300 }); // midpoint path,
   one.c.dispatch('pointermove', { pointerId: 9, offsetX: 440, offsetY: 300 }); // same increments
-  const dot = one.cam.q.reduce((s, v, i) => s + v * two.cam.q[i], 0);
-  assert.ok(Math.abs(dot) > 1 - 1e-4, 'midpoint drag and mouse drag should match');
+  assert.ok(qdot(one.cam.q, two.cam.q) > 1 - 1e-4, 'midpoint drag and mouse drag should match');
 });
 
 test('2->1 handoff rebases on the survivor: next move at its coords is a no-op', () => {
@@ -178,8 +179,7 @@ test('2->1 handoff rebases on the survivor: next move at its coords is a no-op',
   const { q, zoom } = cam.getView();
   c.dispatch('pointermove', touch(1, 350, 320));    // survivor, unmoved
   assert.equal(cam.zoom, zoom);
-  const dot = q.reduce((s, v, i) => s + v * cam.q[i], 0);
-  assert.ok(Math.abs(dot) > 1 - 1e-12, 'no jump across the 2->1 transition');
+  assert.ok(qdot(q, cam.q) > 1 - 1e-12, 'no jump across the 2->1 transition');
 });
 
 test('third finger is ignored while held, promoted after a lift', () => {
@@ -318,18 +318,16 @@ function twist90(interaction) {
 test('two-finger twist rolls about the view axis (globe follows the fingers)', () => {
   const { cam } = twist90();
   const expect = quat.fromAxisAngle([0, 0, 1], Math.PI / 2);   // screen CCW = world +z
-  const dot = expect.reduce((s, v, i) => s + v * cam.q[i], 0);
   // 0.99 ~ 16° of slop: the zoom wobble between the sequential moves leaves a
   // few degrees of uncancelled tumble; a missing twist lands at ~0.9, a sign
   // error at ~0.7 (the zoom-locked twin below holds the tighter 0.995).
-  assert.ok(Math.abs(dot) > 0.99, `twist quat off (|dot| ${Math.abs(dot)})`);
+  assert.ok(qdot(expect, cam.q) > 0.99, `twist quat off (${qdot(expect, cam.q)})`);
   assert.ok(Math.abs(cam.zoom - 1) < 1e-9, `constant spread must not zoom (${cam.zoom})`);
 });
 
 test('twist still rolls when zoom is locked', () => {
   const { cam } = twist90({ zoom: false });
   const expect = quat.fromAxisAngle([0, 0, 1], Math.PI / 2);
-  const dot = expect.reduce((s, v, i) => s + v * cam.q[i], 0);
-  assert.ok(Math.abs(dot) > 0.995, `twist quat off (|dot| ${Math.abs(dot)})`);
+  assert.ok(qdot(expect, cam.q) > 0.995, `twist quat off (${qdot(expect, cam.q)})`);
   assert.equal(cam.zoom, 1);
 });

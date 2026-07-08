@@ -139,9 +139,10 @@ function lineArrows(gj) {                               // per-feature arrowStep
   return out;
 }
 
-// data center -> home view: bounding-cap center over all vertices (capCenter
-// handles even degenerate distributions like the equator loops, where a plain
-// vertex mean collapses to ~zero)
+// data center -> home view: bounding-cap center over all vertices. capCenter
+// avoids the numerical zero-mean collapse, but a >=hemisphere distribution
+// (the equator loops, the cross) has no meaningful cap center — those globes
+// pass an explicit home:[lng,lat] override instead.
 function homeOf(gj) {
   const P = [];
   const add = (c) => P.push(...lnglatToVec3(c[0], c[1]));
@@ -181,13 +182,11 @@ async function globe(id, name, { size, arrowStep = 0, sync = true, home: homeAt 
   });
   // The hint toast: the library emits gesturehint when it passes an input to the
   // page; showing/fading it is app chrome (PLAN §3). Re-emits just reset the timer.
-  // (kind:'wheel' can't fire here — zoom:false detaches the wheel listener — but
-  // the handler stays generic in case zoom is ever re-enabled.)
-  holder.insertAdjacentHTML('beforeend', '<div class="hint"></div>');
+  // (Only the touch hint can fire here: zoom:false detaches the wheel listener.)
+  holder.insertAdjacentHTML('beforeend', '<div class="hint">Use two fingers to rotate the globe</div>');
   const hintEl = holder.lastElementChild;
   let hintT;
-  orb.on('gesturehint', ({ kind }) => {
-    hintEl.textContent = kind === 'wheel' ? 'Use ⌘/Ctrl + scroll to zoom' : 'Use two fingers to rotate the globe';
+  orb.on('gesturehint', () => {
     hintEl.classList.add('show');
     clearTimeout(hintT);
     hintT = setTimeout(() => hintEl.classList.remove('show'), 1600);

@@ -78,9 +78,12 @@ async function show(res){
       bin(`ivea7h_r${res}_idx.u32`, Uint32Array),
       bin(`ivea7h_r${res}_ar.f32`, Float32Array),
     ]); }
-    catch (err) {  // r5/r6 binaries are local-only (too big for the repo) — PLAN §9
-      document.getElementById('status').textContent =
-        `r${res}: ${err.message} — the r5/r6 torture-test binaries are local-only (see README); r1–r3 work here`;
+    catch (err) {
+      // Only diagnose "local-only" for the resolutions where that's the story
+      // (r5/r6 binaries are too big for the repo — PLAN §9); anything else
+      // (network, CORS, a broken r1-r3 file) shows the raw error.
+      document.getElementById('status').textContent = `r${res}: ${err.message}`
+        + (res >= 5 ? ' — the r5/r6 torture-test binaries are local-only (see README); r1–r3 work here' : '');
       return false;
     }
     cache.set(res, { pos, starts, ar, range: finiteRange(ar) });
@@ -168,12 +171,10 @@ document.getElementById('recolor').onclick = ()=>{
     + `· no re-tessellation (layer.update)`;
 };
 // Start at the r5 torture test when its data is present (local dev), else the
-// biggest resolution that ships in the repo.
+// biggest resolution that ships in the repo — via the wired-up button, which
+// already does the highlight sync + show.
 (async () => {
-  if (await show(5) === false) {
-    document.querySelectorAll('#r1,#r2,#r3,#r5,#r6').forEach(b=>b.classList.toggle('on', b.id==='r3'));
-    show(3);
-  }
+  if (await show(5) === false) document.getElementById('r3').click();
 })();
 </script>
 </body>
