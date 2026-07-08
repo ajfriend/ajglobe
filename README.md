@@ -52,8 +52,10 @@ roll, `Shift` for a bigger step.
 
 ## Install / Use
 
+Not on npm yet (that's next) — install straight from GitHub:
+
 ```sh
-npm install ajglobe
+npm install github:ajfriend/ajglobe
 ```
 
 ```js
@@ -81,7 +83,9 @@ orb.setView({ q, zoom });   // apply it; idempotent (re-applying the current vie
 Colors are `'#rrggbb'` strings or `[r, g, b, a]` arrays of **0–255 integers**
 (they go straight into RGBA8 texels — WebGL-style 0–1 floats will render as
 black). For a `<script>` tag without a bundler, the IIFE build exposes a global:
-`<script src="https://cdn.jsdelivr.net/npm/ajglobe"></script>` → `ajglobe.Orb`.
+build it (`just build` → `dist/ajglobe.iife.min.js`), then
+`<script src="dist/ajglobe.iife.min.js"></script>` → `ajglobe.Orb`. (A jsDelivr
+CDN URL comes with the npm release.)
 
 **`lnglat` vs `xyz`:** every geometry-taking call (`polygons`, `lines`, `points`)
 accepts either `lnglat` — a Float32Array of `[lng, lat, …]` in degrees, converted

@@ -32,7 +32,7 @@
     "build": "npm run build:esm && npm run build:iife",
     "build:esm": "esbuild src/orb.js --bundle --format=esm --minify --sourcemap --external:https://* --outfile=dist/ajglobe.min.js",
     "build:iife": "esbuild src/orb.js --bundle --format=iife --global-name=ajglobe --minify --sourcemap --external:https://* --outfile=dist/ajglobe.iife.min.js",
-    "prepack": "npm run build"
+    "prepare": "npm run build"
   },
   "keywords": [
     "globe",
