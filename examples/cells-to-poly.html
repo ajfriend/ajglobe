@@ -160,7 +160,7 @@ function homeOf(gj) {
 const syncOrbs = [];                                    // shared-rotation group
 let syncHome = null;                                    // first synced globe wins (like the blog)
 
-async function globe(id, name, { size, arrowStep = 0, sync = true }) {
+async function globe(id, name, { size, arrowStep = 0, sync = true, home: homeAt = null }) {
   const holder = document.getElementById(id);
   // size is the DESKTOP size; cap at the container so phones don't squash the
   // box (a flex item shrinks width but not height -> oval ring). aspect-ratio
@@ -202,7 +202,10 @@ async function globe(id, name, { size, arrowStep = 0, sync = true }) {
   // zoom MARGIN cancels the camera framing margin exactly: the globe fills the
   // box,
   // matching the original's Plot inset: 1 framing
-  const home = sync ? (syncHome ??= homeOf(gj)) : homeOf(gj);
+  // home: [lng, lat] override for data where the cap-center heuristic is
+  // degenerate (a full equator band has no cap center — homeOf lands on a pole).
+  const home = homeAt ? { lng: homeAt[0], lat: homeAt[1] }
+                      : sync ? (syncHome ??= homeOf(gj)) : homeOf(gj);
   orb.lookAt(home.lng, home.lat);
   orb.setView({ zoom: MARGIN });
   canvas.addEventListener('dblclick', () => orb.setView({ q: lnglatToQuat(home.lng, home.lat, 0), zoom: MARGIN }));
@@ -222,12 +225,12 @@ async function globe(id, name, { size, arrowStep = 0, sync = true }) {
 await globe('g-intro-cells', 'intro_cells', { size: 360 });
 await Promise.all([
   globe('g-intro-poly', 'intro_poly', { size: 360, arrowStep: 3 }),
-  globe('g-equator', 'equator', { size: 500, sync: false }),
+  globe('g-equator', 'equator', { size: 500, sync: false, home: [0, 0] }),   // side-on: the band, not a pole
   globe('g-holes-3', 'holes_3', { size: 390, arrowStep: 3 }),
   globe('g-holes-1', 'holes_1', { size: 390, arrowStep: 3 }),
   globe('g-holes-2', 'holes_2', { size: 390, arrowStep: 3 }),
   globe('g-holes-0', 'holes_0', { size: 390, arrowStep: 3 }),
-  globe('g-cross', 'cross', { size: 600, arrowStep: 3, sync: false }),
+  globe('g-cross', 'cross', { size: 600, arrowStep: 3, sync: false, home: [0, 0] }),  // centered on the bands' crossing
 ]);
 window.ready = true; window.orbs = syncOrbs;            // headless test hooks
 </script>
