@@ -166,7 +166,7 @@ hover a cell for its id (+ pentagon tag) and AR. Generate the data with
 pass as above (edit its `NAMES`).
 
 `examples/cells-to-poly.html`
-([live demo](https://ajfriend.github.io/ajglobe/examples/cells-to-poly.html) —
+([live demo](https://ajfriend.com/ajglobe/examples/cells-to-poly.html) —
 its data is small enough to check in) re-renders the globes from the
 [cells_to_poly blog post](https://ajfriend.com/blog/cells_to_poly/) straight from
 their GeoJSON via `orb.geojson(data)` — per-feature styling from `properties`
