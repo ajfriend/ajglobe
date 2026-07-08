@@ -336,6 +336,10 @@ substrate from M2.
   - [x] gesture unit tests via a dispatching stub canvas (no jsdom): pinch
         ratio/clamps, midpoint≈mouse-drag, 2→1 handoff no-jump, third-finger,
         cooperative gating, hint semantics (cancel hints, tap doesn't).
+  - [x] two-finger twist → roll about the view axis (the map-rotate gesture):
+        finger-vector angle delta, sign flipped for screen-y-down, composed
+        with the midpoint tumble per move; wrap-guarded; works under
+        zoom:false (it's rotation, not zoom).
   - [x] `interaction: { zoom: false }` (phone feedback round 2: framed embeds
         want rotation, not zoom): pinch spread ignored — two fingers still
         rotate — and the wheel listener never attaches (ctrl+scroll stays the

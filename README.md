@@ -47,7 +47,8 @@ rotation, `dist/` bundles, geometry unit tests, and `destroy()`. Next: npm. See
 [PLAN.md](PLAN.md).
 
 **Controls:** drag to rotate, scroll to zoom; on touch screens, one finger
-rotates and two fingers pinch-zoom/rotate. With the globe focused (click it),
+rotates and two fingers pinch-zoom, pan-rotate, and twist-roll (rotating the
+fingers rolls the globe about the view axis, like rotating an embedded map). With the globe focused (click it),
 the keyboard rotates too — arrows / `WASD` tilt and spin, `Q`/`E` (and `←`/`→`)
 roll, `Shift` for a bigger step.
 

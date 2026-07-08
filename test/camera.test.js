@@ -300,3 +300,36 @@ test('zoom:false still allows setView zoom (only user gestures are locked)', () 
   cam.setView({ zoom: 3 });
   assert.equal(cam.zoom, 3);
 });
+
+// Twist: rotating the finger-to-finger vector rolls the globe about the view
+// axis, following the fingers. The two sequential moves below rotate the vector
+// 90° counterclockwise ON SCREEN around the fixed midpoint (400,300); the
+// interleaved midpoint tumble + spread wobble cancel only approximately, hence
+// the loose tolerance (a sign error or missing twist lands at dot ~0.7).
+function twist90(interaction) {
+  const g = gestureCam(interaction);
+  g.c.dispatch('pointerdown', touch(1, 300, 300));
+  g.c.dispatch('pointerdown', touch(2, 500, 300));
+  g.c.dispatch('pointermove', touch(1, 400, 400));
+  g.c.dispatch('pointermove', touch(2, 400, 200));
+  return g;
+}
+
+test('two-finger twist rolls about the view axis (globe follows the fingers)', () => {
+  const { cam } = twist90();
+  const expect = quat.fromAxisAngle([0, 0, 1], Math.PI / 2);   // screen CCW = world +z
+  const dot = expect.reduce((s, v, i) => s + v * cam.q[i], 0);
+  // 0.99 ~ 16° of slop: the zoom wobble between the sequential moves leaves a
+  // few degrees of uncancelled tumble; a missing twist lands at ~0.9, a sign
+  // error at ~0.7 (the zoom-locked twin below holds the tighter 0.995).
+  assert.ok(Math.abs(dot) > 0.99, `twist quat off (|dot| ${Math.abs(dot)})`);
+  assert.ok(Math.abs(cam.zoom - 1) < 1e-9, `constant spread must not zoom (${cam.zoom})`);
+});
+
+test('twist still rolls when zoom is locked', () => {
+  const { cam } = twist90({ zoom: false });
+  const expect = quat.fromAxisAngle([0, 0, 1], Math.PI / 2);
+  const dot = expect.reduce((s, v, i) => s + v * cam.q[i], 0);
+  assert.ok(Math.abs(dot) > 0.995, `twist quat off (|dot| ${Math.abs(dot)})`);
+  assert.equal(cam.zoom, 1);
+});

@@ -94,7 +94,8 @@ export class Camera {
     const P = [...this._pointers.values()];
     if (P.length >= 2) {           // first two (insertion order); extras ignored
       this._ref = { v: this._ball((P[0].x + P[1].x) / 2, (P[0].y + P[1].y) / 2),
-                    dist: Math.hypot(P[1].x - P[0].x, P[1].y - P[0].y) };
+                    dist: Math.hypot(P[1].x - P[0].x, P[1].y - P[0].y),
+                    ang: Math.atan2(P[1].y - P[0].y, P[1].x - P[0].x) };
       this._pinched = true;        // sticky until every finger lifts
     } else if (P.length === 1 && !(cooperative && P[0].type === 'touch')) {
       this._ref = { v: this._ball(P[0].x, P[0].y) };
@@ -134,15 +135,20 @@ export class Camera {
         if (this._pointers.size >= 2) {
           const [a, b] = this._pointers.values();
           if (p !== a && p !== b) return;        // third finger: tracked, ignored
-          // Rotate by the midpoint's arcball delta, then zoom by the spread
-          // ratio, then re-anchor the reference at the NEW zoom (_ball depends
-          // on zoom) so zoom never bleeds into rotation on the next move.
-          const delta = quat.fromUnitVectors(this._ref.v, this._ball((a.x + b.x) / 2, (a.y + b.y) / 2));
+          // Rotate by the midpoint's arcball delta + the twist (finger-vector
+          // angle change -> roll about the view axis, like Q/E; screen y is
+          // down, so the world angle is the NEGATED screen angle), then zoom by
+          // the spread ratio, then re-anchor the reference at the NEW zoom
+          // (_ball depends on zoom) so zoom never bleeds into rotation.
+          let delta = quat.fromUnitVectors(this._ref.v, this._ball((a.x + b.x) / 2, (a.y + b.y) / 2));
+          const ang = Math.atan2(b.y - a.y, b.x - a.x);
+          const twist = Math.atan2(Math.sin(this._ref.ang - ang), Math.cos(this._ref.ang - ang)); // wrapped
+          delta = quat.multiply(quat.fromAxisAngle([0, 0, 1], twist), delta);
           this.q = quat.normalize(quat.multiply(delta, this.q));
           const dist = Math.hypot(b.x - a.x, b.y - a.y);
           if (zoom && dist > 0 && this._ref.dist > 0) this._zoomBy(dist / this._ref.dist);
           else this.onChange();                  // zoom locked, or coincident fingers (0/0 -> NaN would poison the view)
-          this._ref = { v: this._ball((a.x + b.x) / 2, (a.y + b.y) / 2), dist };
+          this._ref = { v: this._ball((a.x + b.x) / 2, (a.y + b.y) / 2), dist, ang };
         } else {
           // Track the previous ball vector so each move is an INCREMENTAL
           // rotation (not cumulative-from-start).
