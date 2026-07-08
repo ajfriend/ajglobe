@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ajglobe — examples</title>
+<style>
+  html,body{margin:0;background:#fff;color:#333;
+    font:15px/1.55 ui-monospace,Menlo,monospace}
+  main{max-width:44rem;margin:0 auto;padding:3rem 1.25rem 4rem}
+  h1{font-size:1.3rem;margin:0 0 .25rem}
+  .sub{color:#999;margin:0 0 2.2rem}
+  a{color:#0a58c2}
+  ul{list-style:none;padding:0;margin:0}
+  li{margin:0 0 1.4rem}
+  li b{font-size:1.05rem}
+  li p{margin:.15rem 0 0;color:#555}
+  .note{color:#999;font-size:.85rem}
+</style>
+</head>
+<body>
+<main>
+  <h1>ajglobe — examples</h1>
+  <p class="sub">fast orthographic globes, straight from <a href="https://github.com/ajfriend/ajglobe">the source</a> — no build step</p>
+  <ul>
+    <li><b><a href="cells-to-poly.html">cells-to-poly</a></b>
+      <p>the globes from the <a href="https://ajfriend.com/blog/cells_to_poly/">cells_to_poly blog post</a>,
+      rendered from GeoJSON — concave polygons with holes, winding-aware fills,
+      per-feature styling, synced rotation.</p></li>
+    <li><b><a href="reference-detail.html">reference-detail</a></b>
+      <p>coastlines, country borders, cities, graticule, small-circle rings — Natural
+      Earth fetched from a CDN at three detail levels.</p></li>
+    <li><b><a href="dggs-compare.html">dggs-compare</a></b>
+      <p>two rotationally-synced globes: H3 res 1 vs res 2, cells colored by skar
+      aspect ratio; hover for cell id + AR.</p></li>
+    <li><b><a href="mu3-ar.html">mu3-ar</a></b>
+      <p>mu3 (a prototype icosahedral aperture-7 DGGS) colored by aspect ratio,
+      switchable resolution. <span class="note">res 0–4 here; 5–6 need the
+      local torture-test binaries.</span></p></li>
+    <li><b><a href="dggs-globe.html">dggs-globe</a></b>
+      <p>every ivea7h cell with per-cell color, opacity fade, PNG export, keyboard
+      rotation. <span class="note">r1–r3 here; the r5/r6 torture tests
+      (168k / 1.18M cells) need the local binaries — see the README.</span></p></li>
+  </ul>
+</main>
+</body>
+</html>

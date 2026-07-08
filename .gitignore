@@ -5,3 +5,16 @@ dist/
 examples/data/*
 # …except the cells_to_poly GeoJSONs: small, static, the example's substrate
 !examples/data/cells_to_poly/
+# …and the small resolutions (~2MB total), so the GitHub Pages demos and fresh
+# clones work out of the box. The r5/r6 torture-test binaries (tens of MB each)
+# stay local-only; regenerate via PLAN §9.
+!examples/data/h3_r1_*
+!examples/data/h3_r2_*
+!examples/data/mu3_r0_*
+!examples/data/mu3_r1_*
+!examples/data/mu3_r2_*
+!examples/data/mu3_r3_*
+!examples/data/mu3_r4_*
+!examples/data/ivea7h_r1_*
+!examples/data/ivea7h_r2_*
+!examples/data/ivea7h_r3_*
