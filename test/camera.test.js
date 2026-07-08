@@ -4,13 +4,20 @@ import assert from 'node:assert/strict';
 import { Camera } from '../src/camera.js';
 import { vec3, quat, lnglatToVec3, quatToLngLat } from '../src/glmath.js';
 
-// Stub only what Camera actually touches: a bounding rect, addEventListener +
-// setPointerCapture (from _attach), and a settable tabIndex.
+// Stub only what Camera actually touches: a bounding rect, style, listener
+// registry (from _attach), setPointerCapture, and a settable tabIndex.
+// dispatch() fires registered handlers with mouse-ish defaults so tests can
+// drive the gesture handlers with plain objects — no jsdom, no PointerEvent.
 function stubCanvas(w = 800, h = 600) {
+  const L = {};
   return {
-    tabIndex: -1,
+    tabIndex: -1, style: {},
     getBoundingClientRect: () => ({ width: w, height: h, left: 0, top: 0, right: w, bottom: h }),
-    addEventListener() {}, setPointerCapture() {},
+    addEventListener(type, fn) { (L[type] ||= []).push(fn); },
+    setPointerCapture() {},
+    dispatch(type, e = {}) {
+      for (const fn of L[type] || []) fn({ type, pointerType: 'mouse', isPrimary: true, preventDefault() { e.defaulted = true; }, ...e });
+    },
   };
 }
 const newCam = () => new Camera(stubCanvas(), () => {}, new AbortController().signal);
@@ -20,6 +27,14 @@ function countingCam() {
   const cam = new Camera(stubCanvas(), () => { calls.n++; }, new AbortController().signal);
   return { cam, calls };
 }
+// Camera wired for gesture tests: exposes its stub canvas and collects hints.
+function gestureCam(interaction) {
+  const c = stubCanvas(), hints = [];
+  const cam = new Camera(c, () => {}, new AbortController().signal, interaction,
+                         (type, e) => hints.push({ type, ...e }));
+  return { cam, c, hints };
+}
+const touch = (id, x, y) => ({ pointerId: id, pointerType: 'touch', offsetX: x, offsetY: y, isPrimary: id === 1 });
 
 test('project ∘ unproject roundtrips on the front hemisphere', () => {
   const cam = newCam();
@@ -103,4 +118,155 @@ test('setView accepts partial views (zoom-only / q-only)', () => {
   cam.setView({ q: q1 });                            // q-only leaves zoom untouched
   assert.deepEqual([...cam.q], [...q1]);
   assert.equal(cam.zoom, 4);
+});
+
+// ---------------------------------------------------------------------------
+// Gestures: pinch zoom, two-finger rotate, cooperative mode. Driven through
+// the stub's dispatch(); geometry facts used below (800x600 canvas, zoom 1):
+// canvas center is (400,300) and _ball(400,300) = [0,0,1].
+
+test('pinch: zoom follows the spread ratio', () => {
+  const { cam, c } = gestureCam();
+  c.dispatch('pointerdown', touch(1, 300, 300));
+  c.dispatch('pointerdown', touch(2, 500, 300));
+  c.dispatch('pointermove', touch(1, 200, 300));   // dist 200 -> 300
+  assert.ok(Math.abs(cam.zoom - 1.5) < 1e-12, `zoom ${cam.zoom} != 1.5`);
+  c.dispatch('pointermove', touch(2, 600, 300));   // dist 300 -> 400
+  assert.ok(Math.abs(cam.zoom - 2) < 1e-12, `zoom ${cam.zoom} != 2`);
+});
+
+test('pinch: zoom clamps at the wheel rails (0.3, 50)', () => {
+  const hi = gestureCam();
+  hi.cam.setView({ zoom: 40 });
+  hi.c.dispatch('pointerdown', touch(1, 300, 300));
+  hi.c.dispatch('pointerdown', touch(2, 500, 300));
+  hi.c.dispatch('pointermove', touch(1, 100, 300)); // dist 200 -> 400: 40*2 -> clamp 50
+  assert.equal(hi.cam.zoom, 50);
+  const lo = gestureCam();
+  lo.cam.setView({ zoom: 0.4 });
+  lo.c.dispatch('pointerdown', touch(1, 200, 300));
+  lo.c.dispatch('pointerdown', touch(2, 600, 300));
+  lo.c.dispatch('pointermove', touch(1, 350, 300));
+  lo.c.dispatch('pointermove', touch(2, 450, 300)); // dist 400 -> 100: 0.4*0.25 -> clamp 0.3
+  assert.equal(lo.cam.zoom, 0.3);
+});
+
+test('two-finger translate rotates like the equivalent single drag of the midpoint', () => {
+  const two = gestureCam();
+  two.c.dispatch('pointerdown', touch(1, 300, 280));
+  two.c.dispatch('pointerdown', touch(2, 500, 320));
+  two.c.dispatch('pointermove', touch(1, 340, 280)); // both fingers +40px x,
+  two.c.dispatch('pointermove', touch(2, 540, 320)); // net spread unchanged
+  // Events are sequential, so the spread wobbles between the two moves (the
+  // intermediate zoom perturbs the second step's arcball scale slightly) —
+  // net zoom returns to ~1 and the rotation approximates the mouse drag.
+  assert.ok(Math.abs(two.cam.zoom - 1) < 1e-9, `zoom ${two.cam.zoom} drifted`);
+  const one = gestureCam();
+  one.c.dispatch('pointerdown', { pointerId: 9, offsetX: 400, offsetY: 300 });
+  one.c.dispatch('pointermove', { pointerId: 9, offsetX: 420, offsetY: 300 }); // midpoint path,
+  one.c.dispatch('pointermove', { pointerId: 9, offsetX: 440, offsetY: 300 }); // same increments
+  const dot = one.cam.q.reduce((s, v, i) => s + v * two.cam.q[i], 0);
+  assert.ok(Math.abs(dot) > 1 - 1e-4, 'midpoint drag and mouse drag should match');
+});
+
+test('2->1 handoff rebases on the survivor: next move at its coords is a no-op', () => {
+  const { cam, c } = gestureCam();
+  c.dispatch('pointerdown', touch(1, 300, 300));
+  c.dispatch('pointerdown', touch(2, 500, 300));
+  c.dispatch('pointermove', touch(1, 350, 320));    // pinch a bit
+  c.dispatch('pointerup', touch(2, 500, 300));      // lift one finger
+  const { q, zoom } = cam.getView();
+  c.dispatch('pointermove', touch(1, 350, 320));    // survivor, unmoved
+  assert.equal(cam.zoom, zoom);
+  const dot = q.reduce((s, v, i) => s + v * cam.q[i], 0);
+  assert.ok(Math.abs(dot) > 1 - 1e-12, 'no jump across the 2->1 transition');
+});
+
+test('third finger is ignored while held, promoted after a lift', () => {
+  const { cam, c } = gestureCam();
+  c.dispatch('pointerdown', touch(1, 300, 300));
+  c.dispatch('pointerdown', touch(2, 500, 300));
+  const qRef = cam.q;
+  c.dispatch('pointerdown', touch(3, 100, 100));
+  c.dispatch('pointermove', touch(3, 700, 500));    // wild move: no effect
+  assert.equal(cam.q, qRef);                        // q never replaced
+  assert.equal(cam.zoom, 1);
+  c.dispatch('pointerup', touch(1, 300, 300));      // now fingers 2+3 drive
+  c.dispatch('pointermove', touch(3, 600, 400));    // dist 283 -> 141: zoom halves
+  assert.ok(Math.abs(cam.zoom - 0.5) < 1e-12, `zoom ${cam.zoom} != 0.5`);
+});
+
+test('cooperative: lone touch is the page\'s (mouse drag still works)', () => {
+  const { cam, c } = gestureCam({ cooperative: true });
+  const qRef = cam.q;
+  c.dispatch('pointerdown', touch(1, 300, 300));
+  c.dispatch('pointermove', touch(1, 400, 350));
+  assert.equal(cam.q, qRef, 'single touch must not rotate');
+  c.dispatch('pointerup', touch(1, 400, 350));
+  c.dispatch('pointerdown', { pointerId: 9, offsetX: 300, offsetY: 300 });
+  c.dispatch('pointermove', { pointerId: 9, offsetX: 400, offsetY: 350 });
+  assert.notEqual(cam.q, qRef, 'mouse drag must still rotate');
+});
+
+test('cooperative: two touches pinch even though one is inert', () => {
+  const { cam, c } = gestureCam({ cooperative: true });
+  c.dispatch('pointerdown', touch(1, 300, 300));
+  c.dispatch('pointerdown', touch(2, 500, 300));
+  c.dispatch('pointermove', touch(1, 200, 300));   // dist 200 -> 300
+  assert.ok(Math.abs(cam.zoom - 1.5) < 1e-12);
+});
+
+test('non-cooperative: single touch still rotates (phones without a page to scroll)', () => {
+  const { cam, c } = gestureCam();
+  const qRef = cam.q;
+  c.dispatch('pointerdown', touch(1, 300, 300));
+  c.dispatch('pointermove', touch(1, 400, 350));
+  assert.notEqual(cam.q, qRef);
+});
+
+test('cooperative wheel: plain scrolls the page (hint), ctrl/meta zooms', () => {
+  const { cam, c, hints } = gestureCam({ cooperative: true });
+  const plain = { deltaY: -100 };
+  c.dispatch('wheel', plain);
+  assert.equal(cam.zoom, 1);
+  assert.equal(plain.defaulted, undefined, 'plain wheel must not preventDefault');
+  assert.deepEqual(hints, [{ type: 'gesturehint', kind: 'wheel' }]);
+  const ctrl = { deltaY: -100, ctrlKey: true };
+  c.dispatch('wheel', ctrl);
+  assert.ok(cam.zoom > 1);
+  assert.equal(ctrl.defaulted, true);
+  assert.equal(hints.length, 1, 'zooming wheel does not hint');
+});
+
+test('touch hint: fires on cancel of a lone touch; not on tap; not out of a pinch', () => {
+  const a = gestureCam({ cooperative: true });         // browser reclaims -> hint
+  a.c.dispatch('pointerdown', touch(1, 300, 300));
+  a.c.dispatch('pointercancel', touch(1, 310, 340));
+  assert.deepEqual(a.hints, [{ type: 'gesturehint', kind: 'touch' }]);
+  const b = gestureCam({ cooperative: true });         // tap -> pointerup -> silent
+  b.c.dispatch('pointerdown', touch(1, 300, 300));
+  b.c.dispatch('pointerup', touch(1, 300, 300));
+  assert.deepEqual(b.hints, []);
+  const p = gestureCam({ cooperative: true });         // cancel out of a pinch -> silent
+  p.c.dispatch('pointerdown', touch(1, 300, 300));
+  p.c.dispatch('pointerdown', touch(2, 500, 300));
+  p.c.dispatch('pointercancel', touch(1, 300, 300));
+  p.c.dispatch('pointercancel', touch(2, 500, 300));
+  assert.deepEqual(p.hints, []);
+});
+
+test('touch-action plumbing: none / pan-x pan-y / untouched without drag', () => {
+  assert.equal(gestureCam().c.style.touchAction, 'none');
+  assert.equal(gestureCam({ cooperative: true }).c.style.touchAction, 'pan-x pan-y');
+  assert.equal(gestureCam({ drag: false }).c.style.touchAction, undefined);
+});
+
+test('cooperative touchmove preventDefaults only multi-finger gestures', () => {
+  const { c } = gestureCam({ cooperative: true });
+  const two = { touches: [{}, {}] };
+  c.dispatch('touchmove', two);
+  assert.equal(two.defaulted, true, '2 touches: gesture is ours');
+  const one = { touches: [{}] };
+  c.dispatch('touchmove', one);
+  assert.equal(one.defaulted, undefined, '1 touch: the page scrolls');
 });

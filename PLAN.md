@@ -78,8 +78,9 @@ cost argument: §4 / §7.)
 **The library owns** (all coupled to render/projection math; "solve it once"):
 - Layers of primitives: `points()`, `lines()`, `polygons()`, plus
   `layer.update({style})` / `layer.remove()`. Style is per-feature.
-- Camera: `lookAt()`, get/set `rotation`/`zoom`, arcball drag + wheel zoom +
-  keyboard rotation (canvas-scoped).
+- Camera: `lookAt()`, get/set `rotation`/`zoom`, arcball drag (1 or 2 fingers) +
+  pinch/wheel zoom + keyboard rotation (canvas-scoped); optional cooperative
+  mode for embeds (M9).
 - Interaction *results* as events: `on('hover'|'click', (i, {lng,lat}) => …)`,
   `on('viewchange', …)`.
 - Coordinate helpers: `project(lng,lat) → {x,y,visible}`,
@@ -102,7 +103,7 @@ copy — never bundled into core.
 
 ```
 src/glmath.js   vec3 / quat / mat4 (column-major) + lnglatToVec3  — vendored, no deps
-src/camera.js   orientation quaternion + zoom; arcball drag; wheel zoom; mvp()
+src/camera.js   orientation quaternion + zoom; arcball drag + pinch; wheel zoom; mvp()
 src/orb.js      WebGL2: program/shader helpers, depth disk, polygons() (topology
                 fan fills), render loop (dirty-flag), resize/DPR; public API
 examples/dggs-globe.html   the ivea7h r5/r6 torture test (+ HUD, viridis, data load)
@@ -147,7 +148,9 @@ orb.points({ lnglat|xyz, color, size });           // round disc markers (per-fe
 orb.polygons({ ..., polys });      // ring-grouped: concave polygons + holes (tess.js; annotation scale)
 orb.geojson(gj, defaults?);        // FeatureCollection styled from properties (fill/stroke/…); -> {layers, remove}
 orb.lines({ ..., dash: [on, off] });  // dashed strokes (CSS px along the arc)
-new Orb(canvas, { interaction: { drag?, wheel?, keys? } });  // gate user input (embeds: wheel off)
+new Orb(canvas, { interaction: { drag?, wheel?, keys?, cooperative? } });  // gate user input; cooperative =
+                                   // embedded-map gestures: 1 finger / plain wheel stay the page's,
+                                   // 2 fingers or ctrl/cmd+wheel move the globe (pinch always works)
 orb.lookAt(lng, lat);              // center a point, north up
 orb.getView();                     // -> {q, zoom}   exact, fast view
 orb.setView({ q?, zoom? });        // apply a view; idempotent (echo no-ops)
@@ -162,6 +165,8 @@ orb.pick(x, y);                    // -> {layer, index} | null  (GPU color picki
 orb.highlight(index);              // tint one fill feature (-1 = none)
 orb.on('hover'|'click'|'viewchange', cb);          // hover/click: {x,y,lng,lat,index,layer}
                                    // 'click' means a stationary click: drag-releases are swallowed (<=4px travel)
+orb.on('gesturehint', cb);         // cooperative mode passed an input to the page: {kind:'touch'|'wheel'}
+                                   // -> app shows its own "use two fingers"/"ctrl+scroll" toast (cells-to-poly)
 await orb.snapshot({ width, height, supersample, transparent, type });  // -> PNG Blob
 orb.stats;                         // {features, verts}
 orb.destroy();                     // stop the loop, detach listeners, free all GPU resources
@@ -314,6 +319,22 @@ substrate from M2.
   - [x] reuse: one circle sampler (`glmath.circlePointsInto`) for
         smallCircleLines / graticule / tess cap split; px↔NDC pair in camera;
         `_attrib`/`_attribI` merged.
+- [x] **M9 — multi-touch + cooperative gestures (2026-07-08)** — phone feedback
+      on the live demos ("stuck on the globe, can't scroll"):
+  - [x] pinch zoom + two-finger rotate (camera.js): pointer Map + rebase-on-
+        transition (1↔2 fingers jump-free); midpoint arcball + spread-ratio
+        zoom, re-anchored after each zoom so zoom never bleeds into rotation.
+  - [x] `interaction: { cooperative }` — one finger / plain wheel stay the
+        page's; 2 fingers or ctrl/cmd+wheel move the globe (trackpad pinch =
+        ctrl-wheel for free). Library owns `canvas.style.touchAction`
+        ('pan-x pan-y' vs 'none'); non-passive touchmove preventDefault on 2+
+        touches (pan-* is finger-count-blind; iOS viewport pinch).
+  - [x] `gesturehint` event ({kind:'touch'|'wheel'}, fired when an input is
+        passed to the page); the toast itself is app code — cells-to-poly
+        `.hint` overlay, same pattern as its `.ring`.
+  - [x] gesture unit tests via a dispatching stub canvas (no jsdom): pinch
+        ratio/clamps, midpoint≈mouse-drag, 2→1 handoff no-jump, third-finger,
+        cooperative gating, hint semantics (cancel hints, tap doesn't).
 - [ ] **Later:** time-normalized momentum (opt-in), reuse the 3D core for 2D
       map projections, publish to npm. *(Depth-disk occluder: done, §7.
       Concave fills: done, M7. Perspective/deep zoom dropped 2026-07-06 — §7.)*

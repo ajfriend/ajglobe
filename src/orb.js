@@ -430,15 +430,18 @@ export class Orb {
     this._destroyed = false;
     this._abort = new AbortController();
     const signal = this._abort.signal;
-    this.cam = new Camera(canvas, () => { this._invalidate(); this._emit('viewchange'); }, signal, opts.interaction);
+    this.cam = new Camera(canvas, () => { this._invalidate(); this._emit('viewchange'); }, signal,
+                          opts.interaction, (type, e) => this._emit(type, e));
     this._dirty = true;
-    canvas.addEventListener('pointermove', (e) => this._emitPointer('hover', e), { signal });
+    // Hover/click are single-cursor concepts: ignore secondary fingers, which
+    // would otherwise jitter hover and clobber downAt during a pinch.
+    canvas.addEventListener('pointermove', (e) => { if (e.isPrimary === false) return; this._emitPointer('hover', e); }, { signal });
     // 'click' means "the user clicked a spot", not the raw DOM event: the DOM
     // fires click on every press+release pair, including releasing an arcball
     // drag — an artifact of the library's own interaction that every consumer
     // would otherwise have to suppress. Swallow clicks whose pointer travelled.
     let downAt = null;
-    canvas.addEventListener('pointerdown', (e) => { downAt = [e.offsetX, e.offsetY]; }, { signal });
+    canvas.addEventListener('pointerdown', (e) => { if (e.isPrimary === false) return; downAt = [e.offsetX, e.offsetY]; }, { signal });
     canvas.addEventListener('click', (e) => {
       if (downAt && Math.hypot(e.offsetX - downAt[0], e.offsetY - downAt[1]) > 4) return;
       this._emitPointer('click', e);

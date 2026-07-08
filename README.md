@@ -46,9 +46,19 @@ hover picking, `snapshot()` PNG export, `coastlines()`/`borders()`, keyboard
 rotation, `dist/` bundles, geometry unit tests, and `destroy()`. Next: npm. See
 [PLAN.md](PLAN.md).
 
-**Controls:** drag to rotate, scroll to zoom. With the globe focused (click it),
+**Controls:** drag to rotate, scroll to zoom; on touch screens, one finger
+rotates and two fingers pinch-zoom/rotate. With the globe focused (click it),
 the keyboard rotates too — arrows / `WASD` tilt and spin, `Q`/`E` (and `←`/`→`)
 roll, `Shift` for a bigger step.
+
+For a globe **embedded in a scrolling page**, pass
+`interaction: { cooperative: true }` — the embedded-map pattern: one finger pans
+the *page* and a plain wheel scrolls it; two fingers or `⌘`/`Ctrl`+wheel move the
+globe (desktop trackpad pinches arrive as ctrl-wheel, so they zoom too). When an
+input is passed to the page, the orb emits `gesturehint`
+(`{ kind: 'touch' | 'wheel' }`) so app code can show a "use two fingers" /
+"ctrl+scroll to zoom" toast — see `examples/cells-to-poly.html`. The individual
+gates `{ drag, wheel, keys }` still work for switching inputs off entirely.
 
 ## Install / Use
 
@@ -178,8 +188,10 @@ pass as above (edit its `NAMES`).
 [cells_to_poly blog post](https://ajfriend.com/blog/cells_to_poly/) straight from
 their GeoJSON via `orb.geojson(data)` — per-feature styling from `properties`
 (fill/stroke/opacity/dashes), concave polygons with holes, winding-aware fills
-(a CW loop fills the complement of the sphere), synced rotation, and wheel zoom
-disabled (`interaction: { wheel: false }`) so the page keeps its scroll.
+(a CW loop fills the complement of the sphere), synced rotation, and cooperative
+gestures (`interaction: { cooperative: true }`) so the page keeps its scroll —
+two fingers or `⌘`/`Ctrl`+wheel move a globe, with a hint toast built on the
+`gesturehint` event.
 
 ## Develop
 

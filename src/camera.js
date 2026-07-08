@@ -28,16 +28,33 @@ const VIEW = mat4.lookAt([0, 0, 3], [0, 0, 0], [0, 1, 0]);
 export const MARGIN = 1.05;
 
 export class Camera {
-  constructor(canvas, onChange, signal, interaction = {}) {
+  /**
+   * @param {HTMLCanvasElement} canvas
+   * @param {() => void} onChange  redraw callback
+   * @param {AbortSignal} signal   detaches every listener on abort
+   * @param {{drag?: boolean, wheel?: boolean, keys?: boolean, cooperative?: boolean}} [interaction]
+   *        cooperative: the embedded-map pattern — a single finger pans the PAGE
+   *        and a plain wheel scrolls it; two fingers or ctrl/cmd+wheel move the
+   *        globe. Mouse/pen drag is unaffected.
+   * @param {(type: string, detail: object) => void} [emit]  event channel for
+   *        'gesturehint' ({kind:'touch'|'wheel'}) — fired when cooperative mode
+   *        passes an input to the page, so app code can show a "use two
+   *        fingers" / "ctrl+scroll" overlay.
+   */
+  constructor(canvas, onChange, signal, interaction = {}, emit = () => {}) {
     this.canvas = canvas;
     this.onChange = onChange;
     this.q = quat.identity();      // model orientation
     this.zoom = 1;                 // 1 == globe just fits
-    this._drag = null;             // arcball drag state
+    this._pointers = new Map();    // pointerId -> {x, y, type}; insertion-ordered
+    this._ref = null;              // gesture reference: {v} (drag) | {v, dist} (pinch)
+    this._pinched = false;         // pinch happened this touch sequence (gates the hint)
+    this._emit = emit;
     // Which input handlers to attach. Embedded globes (blog posts, dashboards)
-    // often want wheel OFF so the page keeps its scroll, while drag still works.
+    // often want wheel OFF so the page keeps its scroll, while drag still works;
+    // cooperative goes further (see the JSDoc above).
     // getView/setView/lookAt always work regardless — this only gates user input.
-    this._attach(signal, { drag: true, wheel: true, keys: true, ...interaction });
+    this._attach(signal, { drag: true, wheel: true, keys: true, cooperative: false, ...interaction });
   }
 
   // Orthographic half-height in world units: globe radius 1 + the MARGIN,
@@ -60,35 +77,117 @@ export class Camera {
     return d2 <= 1 ? [x, y, Math.sqrt(1 - d2)] : vec3.norm([x, y, 0]);
   }
 
-  _attach(signal, { drag, wheel, keys }) {
+  _zoomBy(f) {
+    this.zoom = Math.max(0.3, Math.min(50, this.zoom * f));
+    this.onChange();
+  }
+
+  // Recompute the gesture reference from the pointers currently down. Called on
+  // every pointer-count change, so 1<->2 finger transitions are jump-free: each
+  // move's delta is measured against the state at the last transition, never
+  // across it. A lone touch in cooperative mode gets NO reference — that finger
+  // belongs to the page (scroll), not the globe.
+  _rebase(cooperative) {
+    const P = [...this._pointers.values()];
+    if (P.length >= 2) {           // first two (insertion order); extras ignored
+      this._ref = { v: this._ball((P[0].x + P[1].x) / 2, (P[0].y + P[1].y) / 2),
+                    dist: Math.hypot(P[1].x - P[0].x, P[1].y - P[0].y) };
+      this._pinched = true;        // sticky until every finger lifts
+    } else if (P.length === 1 && !(cooperative && P[0].type === 'touch')) {
+      this._ref = { v: this._ball(P[0].x, P[0].y) };
+    } else {
+      this._ref = null;
+      if (P.length === 0) this._pinched = false;
+    }
+  }
+
+  _attach(signal, { drag, wheel, keys, cooperative }) {
     const c = this.canvas;
     if (drag) {
+      // The library owns touch-action (input plumbing on its own canvas, not
+      // chrome): cooperative leaves single-finger pans to the page; otherwise
+      // every touch is ours. Not restored on destroy() — a successor Orb on the
+      // same canvas re-sets it.
+      c.style.touchAction = cooperative ? 'pan-x pan-y' : 'none';
       c.addEventListener('pointerdown', (e) => {
-        c.setPointerCapture(e.pointerId);
-        // Track the previous ball vector so each move is an INCREMENTAL rotation
-        // (not cumulative-from-start).
-        this._drag = { v: this._ball(e.offsetX, e.offsetY) };
+        // A lone cooperative touch is tracked but not captured and gets no _ref:
+        // either the browser takes it for scrolling (-> pointercancel, the hint
+        // cue) or a second finger upgrades it to a pinch. Touch pointers are
+        // implicitly captured to their target anyway, so skipping capture here
+        // is about intent, not behavior.
+        // try: capture throws when the pointer is already gone (lifted before
+        // this handler ran, or a synthetic event) — losing capture is fine,
+        // losing the whole gesture to the exception is not.
+        if (!(cooperative && e.pointerType === 'touch')) {
+          try { c.setPointerCapture(e.pointerId); } catch { /* stale/synthetic pointer */ }
+        }
+        this._pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY, type: e.pointerType });
+        this._rebase(cooperative);
       }, { signal });
       c.addEventListener('pointermove', (e) => {
-        if (!this._drag) return;
-        const v1 = this._ball(e.offsetX, e.offsetY);
-        const delta = quat.fromUnitVectors(this._drag.v, v1);   // incremental step
-        this.q = quat.normalize(quat.multiply(delta, this.q));
-        this._drag.v = v1;                   // advance reference -> per-move deltas
-        this.onChange();
+        const p = this._pointers.get(e.pointerId);
+        if (!p || !this._ref) return;            // hover, or a finger the page owns
+        p.x = e.offsetX; p.y = e.offsetY;
+        if (this._pointers.size >= 2) {
+          const [a, b] = this._pointers.values();
+          if (p !== a && p !== b) return;        // third finger: tracked, ignored
+          // Rotate by the midpoint's arcball delta, then zoom by the spread
+          // ratio, then re-anchor the reference at the NEW zoom (_ball depends
+          // on zoom) so zoom never bleeds into rotation on the next move.
+          const delta = quat.fromUnitVectors(this._ref.v, this._ball((a.x + b.x) / 2, (a.y + b.y) / 2));
+          this.q = quat.normalize(quat.multiply(delta, this.q));
+          const dist = Math.hypot(b.x - a.x, b.y - a.y);
+          if (dist > 0 && this._ref.dist > 0) this._zoomBy(dist / this._ref.dist);
+          else this.onChange();                  // coincident fingers: 0/0 zoom would poison the view with NaN
+          this._ref = { v: this._ball((a.x + b.x) / 2, (a.y + b.y) / 2), dist };
+        } else {
+          // Track the previous ball vector so each move is an INCREMENTAL
+          // rotation (not cumulative-from-start).
+          const v1 = this._ball(e.offsetX, e.offsetY);
+          const delta = quat.fromUnitVectors(this._ref.v, v1);
+          this.q = quat.normalize(quat.multiply(delta, this.q));
+          this._ref.v = v1;                      // advance reference -> per-move deltas
+          this.onChange();
+        }
       }, { signal });
       // Direct drag: the globe stops where you release it. (A time-normalized
       // momentum fling can return later as a tuned, opt-in feature; the naive
       // constant-decay version amplified tiny drags into a disorienting spin.)
-      const end = () => { this._drag = null; };
+      const end = (e) => {
+        const p = this._pointers.get(e.pointerId);
+        this._pointers.delete(e.pointerId);
+        // pointercancel of a lone cooperative touch = the browser took it to
+        // scroll — the cue for "use two fingers". Taps end in pointerup (no
+        // hint); a finger cancelled out of a pinch is covered by _pinched.
+        if (e.type === 'pointercancel' && cooperative && p?.type === 'touch'
+            && this._pointers.size === 0 && !this._pinched) {
+          this._emit('gesturehint', { kind: 'touch' });
+        }
+        this._rebase(cooperative);
+      };
       c.addEventListener('pointerup', end, { signal });
       c.addEventListener('pointercancel', end, { signal });
+      // touch-action 'pan-x pan-y' is finger-count-blind (the browser may claim
+      // a two-finger PAN as a scroll), and iOS Safari's viewport pinch-zoom has
+      // ignored touch-action alone — a non-passive preventDefault while 2+
+      // touches are down keeps multi-finger gestures ours, while a single
+      // finger stays the page's.
+      if (cooperative) c.addEventListener('touchmove', (e) => {
+        if (e.touches.length >= 2) e.preventDefault();
+      }, { passive: false, signal });
     }
     if (wheel) {
       c.addEventListener('wheel', (e) => {
-        e.preventDefault();
-        this.zoom = Math.max(0.3, Math.min(50, this.zoom * Math.exp(-e.deltaY * 0.001)));
-        this.onChange();
+        if (cooperative && !e.ctrlKey && !e.metaKey) {
+          // The page keeps plain scroll; hint how to zoom. No throttle here —
+          // the app's fade-timer reset is the debounce, and emitting with no
+          // listeners is a no-op. (Trackpad pinches arrive as ctrlKey wheel
+          // events, so they zoom the globe with no extra code.)
+          this._emit('gesturehint', { kind: 'wheel' });
+          return;
+        }
+        e.preventDefault();        // also blocks ctrl+wheel browser page-zoom
+        this._zoomBy(Math.exp(-e.deltaY * 0.001));
       }, { passive: false, signal });
     }
     // Keyboard rotation, scoped to the (focusable) canvas so it never hijacks the
