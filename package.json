@@ -1,6 +1,6 @@
 {
   "name": "ajglobe",
-  "version": "0.0.1",
+  "version": "0.0.3",
   "description": "General, fast orthographic globe rendering of points, lines, and polygons — geometry lives on the GPU (60 FPS at 1M+ DGGS cells), antimeridian/pole-correct by construction.",
   "type": "module",
   "main": "./dist/ajglobe.min.js",
