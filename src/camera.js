@@ -60,22 +60,20 @@ export class Camera {
     this._attach(signal);
   }
 
-  // Orthographic half-height in world units: globe radius 1 + the MARGIN,
-  // divided by zoom. Shared by the arcball unproject (_ball) and the projection.
-  _halfExtent() { return MARGIN / this.zoom; }
-
-  // The orthographic half-extents (x, y) for a viewport of this aspect: the
-  // SMALLER side spans MARGIN / zoom, so zoom 1 fits the whole globe in any
-  // box, landscape or portrait. (Fitting the height alone clips the sides
-  // of a portrait canvas.)
+  // The orthographic half-extents (x, y) in world units for a viewport of
+  // this aspect: the SMALLER side spans MARGIN / zoom (globe radius 1 plus
+  // the margin), so zoom 1 fits the whole globe in any box, landscape or
+  // portrait. Shared by the arcball (_ball) and the projection. (Fitting the
+  // height alone clipped the sides of a portrait canvas.)
   _extents(aspect) {
-    const s = this._halfExtent();
+    const s = MARGIN / this.zoom;
     return aspect >= 1 ? [s * aspect, s] : [s, s / aspect];
   }
 
   // Device px per world unit (≈ per radian of arc at the globe center) for a
-  // viewport of hPx device pixels — the scale screen-space effects (dashes) use.
-  pxPerRad(hPx, aspect = 1) { return (hPx / 2) / this._extents(aspect)[1]; }
+  // viewport hPx device pixels tall with this aspect — the scale screen-space
+  // effects (dashes) use.
+  pxPerRad(hPx, aspect) { return (hPx / 2) / this._extents(aspect)[1]; }
 
   // The canvas's own CSS-pixel size. Pointer coordinates arrive as offsetX/Y,
   // which are in this frame; getBoundingClientRect() is NOT when an ancestor

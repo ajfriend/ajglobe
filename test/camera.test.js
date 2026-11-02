@@ -4,15 +4,17 @@ import assert from 'node:assert/strict';
 import { Camera } from '../src/camera.js';
 import { vec3, quat, lnglatToVec3, quatToLngLat } from '../src/glmath.js';
 
-// Stub only what Camera actually touches: a bounding rect, style, listener
-// registry (from _attach), setPointerCapture, and a settable tabIndex.
+// Stub only what Camera actually touches: the client size (the frame pointer
+// offsetX/Y arrive in), style, listener registry (from _attach),
+// setPointerCapture, and a settable tabIndex. `scale` makes the bounding rect
+// differ from the client size, as under a CSS-transformed ancestor.
 // dispatch() fires registered handlers with mouse-ish defaults so tests can
 // drive the gesture handlers with plain objects — no jsdom, no PointerEvent.
-function stubCanvas(w = 800, h = 600) {
+function stubCanvas(w = 800, h = 600, scale = 1) {
   const L = {};
   return {
-    tabIndex: -1, style: {},
-    getBoundingClientRect: () => ({ width: w, height: h, left: 0, top: 0, right: w, bottom: h }),
+    tabIndex: -1, style: {}, clientWidth: w, clientHeight: h,
+    getBoundingClientRect: () => ({ width: w * scale, height: h * scale, left: 0, top: 0, right: w * scale, bottom: h * scale }),
     addEventListener(type, fn) { (L[type] ||= []).push(fn); },
     setPointerCapture() {},
     dispatch(type, e = {}) {
@@ -37,6 +39,39 @@ function gestureCam(interaction) {
 const touch = (id, x, y) => ({ pointerId: id, pointerType: 'touch', offsetX: x, offsetY: y });
 // Quaternion similarity: |q1.q2| ~ 1 means same rotation (q and -q are the same).
 const qdot = (a, b) => Math.abs(a.reduce((s, v, i) => s + v * b[i], 0));
+
+test('zoom 1 fits the whole globe in a box of any aspect', () => {
+  // The limb points (90° from the view centre) must land inside the canvas,
+  // for landscape and portrait boxes alike.
+  for (const [w, h] of [[800, 300], [300, 800], [800, 600]]) {
+    const cam = new Camera(stubCanvas(w, h), () => {}, new AbortController().signal);
+    cam.lookAt(0, 0);
+    for (const [lng, lat] of [[90, 0], [-90, 0], [0, 90], [0, -90]]) {
+      const p = cam.project(lng, lat);
+      assert.ok(p.x >= 0 && p.x <= w && p.y >= 0 && p.y <= h, `${w}x${h}: limb (${lng},${lat}) at ${p.x},${p.y}`);
+    }
+    // and the globe fills the smaller side to within the margin
+    const span = Math.abs(cam.project(90, 0).x - cam.project(-90, 0).x);
+    assert.ok(Math.abs(span - 2 * Math.min(w, h) / 2 / 1.05) < 1, `${w}x${h}: span ${span}`);
+  }
+});
+
+test('pointer mapping uses the canvas frame, not a transformed bounding rect', () => {
+  // Under a CSS-scaled ancestor the rect is 0.6x the client size; offsetX/Y
+  // are still in client pixels, so the canvas centre must map to the ball's pole.
+  const cam = new Camera(stubCanvas(800, 600, 0.6), () => {}, new AbortController().signal);
+  const b = cam._ball(400, 300);
+  assert.ok(Math.abs(b[0]) < 1e-9 && Math.abs(b[1]) < 1e-9 && Math.abs(b[2] - 1) < 1e-9, `ball ${b}`);
+});
+
+test('a consumed key stops propagating to the host', () => {
+  const { cam, c } = gestureCam({ keys: true });
+  const seen = [];
+  c.dispatch('keydown', { code: 'KeyD', stopPropagation() { seen.push('stopped'); } });
+  c.dispatch('keydown', { code: 'KeyZ', stopPropagation() { seen.push('stopped-unhandled'); } });
+  assert.deepEqual(seen, ['stopped']);
+  void cam;
+});
 
 test('project ∘ unproject roundtrips on the front hemisphere', () => {
   const cam = newCam();
