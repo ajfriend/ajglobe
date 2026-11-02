@@ -64,9 +64,18 @@ export class Camera {
   // divided by zoom. Shared by the arcball unproject (_ball) and the projection.
   _halfExtent() { return MARGIN / this.zoom; }
 
+  // The orthographic half-extents (x, y) for a viewport of this aspect: the
+  // SMALLER side spans MARGIN / zoom, so zoom 1 fits the whole globe in any
+  // box, landscape or portrait. (Fitting the height alone clips the sides
+  // of a portrait canvas.)
+  _extents(aspect) {
+    const s = this._halfExtent();
+    return aspect >= 1 ? [s * aspect, s] : [s, s / aspect];
+  }
+
   // Device px per world unit (≈ per radian of arc at the globe center) for a
   // viewport of hPx device pixels — the scale screen-space effects (dashes) use.
-  pxPerRad(hPx) { return (hPx / 2) / this._halfExtent(); }
+  pxPerRad(hPx, aspect = 1) { return (hPx / 2) / this._extents(aspect)[1]; }
 
   // The canvas's own CSS-pixel size. Pointer coordinates arrive as offsetX/Y,
   // which are in this frame; getBoundingClientRect() is NOT when an ancestor
@@ -79,10 +88,9 @@ export class Camera {
   // in the camera/world frame (z toward the viewer).
   _ball(px, py) {
     const [w, h] = this._size();
-    const s = this._halfExtent();
-    const aspect = w / h;
-    const x = ((2 * px) / w - 1) * s * aspect;  // world units on the view plane
-    const y = -((2 * py) / h - 1) * s;
+    const [ex, ey] = this._extents(w / h);
+    const x = ((2 * px) / w - 1) * ex;  // world units on the view plane
+    const y = -((2 * py) / h - 1) * ey;
     const d2 = x * x + y * y;
     return d2 <= 1 ? [x, y, Math.sqrt(1 - d2)] : vec3.norm([x, y, 0]);
   }
@@ -263,8 +271,8 @@ export class Camera {
   // Projection · view only (no model rotation): the matrix for screen-aligned
   // geometry like the depth disk, which must not rotate with the globe.
   vp(aspect) {
-    const s = this._halfExtent();
-    const proj = mat4.ortho(-s * aspect, s * aspect, -s, s, 0.1, 10);
+    const [ex, ey] = this._extents(aspect);
+    const proj = mat4.ortho(-ex, ex, -ey, ey, 0.1, 10);
     return mat4.multiply(proj, VIEW);
   }
 
