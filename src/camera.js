@@ -60,22 +60,35 @@ export class Camera {
     this._attach(signal);
   }
 
-  // Orthographic half-height in world units: globe radius 1 + the MARGIN,
-  // divided by zoom. Shared by the arcball unproject (_ball) and the projection.
-  _halfExtent() { return MARGIN / this.zoom; }
+  // The orthographic half-extents (x, y) in world units for a viewport of
+  // this aspect: the SMALLER side spans MARGIN / zoom (globe radius 1 plus
+  // the margin), so zoom 1 fits the whole globe in any box, landscape or
+  // portrait. Shared by the arcball (_ball) and the projection. (Fitting the
+  // height alone clipped the sides of a portrait canvas.)
+  _extents(aspect) {
+    const s = MARGIN / this.zoom;
+    return aspect >= 1 ? [s * aspect, s] : [s, s / aspect];
+  }
 
   // Device px per world unit (≈ per radian of arc at the globe center) for a
-  // viewport of hPx device pixels — the scale screen-space effects (dashes) use.
-  pxPerRad(hPx) { return (hPx / 2) / this._halfExtent(); }
+  // viewport hPx device pixels tall with this aspect — the scale screen-space
+  // effects (dashes) use.
+  pxPerRad(hPx, aspect) { return (hPx / 2) / this._extents(aspect)[1]; }
+
+  // The canvas's own CSS-pixel size. Pointer coordinates arrive as offsetX/Y,
+  // which are in this frame; getBoundingClientRect() is NOT when an ancestor
+  // carries a CSS transform (a reveal.js slide scaled to the window, say):
+  // mixing the two scales every drag by the transform and the rotation axis
+  // wanders. Every pixel<->view mapping goes through this.
+  _size() { return [this.canvas.clientWidth || 1, this.canvas.clientHeight || 1]; }
 
   // Project a pixel to a point on the virtual arcball (radius = globe radius),
   // in the camera/world frame (z toward the viewer).
   _ball(px, py) {
-    const r = this.canvas.getBoundingClientRect();
-    const s = this._halfExtent();
-    const aspect = r.width / r.height;
-    const x = ((2 * px) / r.width - 1) * s * aspect;  // world units on the view plane
-    const y = -((2 * py) / r.height - 1) * s;
+    const [w, h] = this._size();
+    const [ex, ey] = this._extents(w / h);
+    const x = ((2 * px) / w - 1) * ex;  // world units on the view plane
+    const y = -((2 * py) / h - 1) * ey;
     const d2 = x * x + y * y;
     return d2 <= 1 ? [x, y, Math.sqrt(1 - d2)] : vec3.norm([x, y, 0]);
   }
@@ -217,7 +230,10 @@ export class Camera {
       c.addEventListener('keydown', (e) => {
         const axis = KEY_AXIS[e.code];
         if (!axis) return;
-        e.preventDefault();
+        // A key the focused globe consumed is not also the host's: a slide
+        // deck listening on the document must not change slides on the same
+        // arrow that rolled the globe.
+        e.preventDefault(); e.stopPropagation();
         const scale = axis[2] !== 0 ? 1 : this.zoom;    // roll = screen-Z axis
         const delta = quat.fromAxisAngle(axis, ((e.shiftKey ? 30 : 10) / scale) * DEG);
         this.q = quat.normalize(quat.multiply(delta, this.q));
@@ -253,8 +269,8 @@ export class Camera {
   // Projection · view only (no model rotation): the matrix for screen-aligned
   // geometry like the depth disk, which must not rotate with the globe.
   vp(aspect) {
-    const s = this._halfExtent();
-    const proj = mat4.ortho(-s * aspect, s * aspect, -s, s, 0.1, 10);
+    const [ex, ey] = this._extents(aspect);
+    const proj = mat4.ortho(-ex, ex, -ey, ey, 0.1, 10);
     return mat4.multiply(proj, VIEW);
   }
 
@@ -289,11 +305,11 @@ export class Camera {
   // y-flip convention: mirror of unproject's.)
   project(lngDeg, latDeg) {
     const p = lnglatToVec3(lngDeg, latDeg);
-    const r = this.canvas.getBoundingClientRect();
-    const clip = mat4.mulVec4(this.mvp(r.width / r.height), [p[0], p[1], p[2], 1]);
+    const [w, h] = this._size();
+    const clip = mat4.mulVec4(this.mvp(w / h), [p[0], p[1], p[2], 1]);
     return {
-      x: (clip[0] / clip[3] * 0.5 + 0.5) * r.width,
-      y: (1 - (clip[1] / clip[3] * 0.5 + 0.5)) * r.height,
+      x: (clip[0] / clip[3] * 0.5 + 0.5) * w,
+      y: (1 - (clip[1] / clip[3] * 0.5 + 0.5)) * h,
       // Front hemisphere = the model-rotated point faces the +z viewer.
       visible: quat.rotateVec3(this.q, p)[2] > 0,
     };
@@ -304,11 +320,11 @@ export class Camera {
   // space — MVP already bakes in the model rotation — so we intersect the unit
   // sphere there and read lng/lat off the hit directly (no extra un-rotation).
   unproject(px, py) {
-    const r = this.canvas.getBoundingClientRect();
-    const m = this.matrices(r.width / r.height);
+    const [w, h] = this._size();
+    const m = this.matrices(w / h);
     const inv = m.inv !== undefined ? m.inv : (m.inv = mat4.invert(m.mvp));
     if (!inv) return null;
-    const nx = (px / r.width) * 2 - 1, ny = 1 - (py / r.height) * 2;
+    const nx = (px / w) * 2 - 1, ny = 1 - (py / h) * 2;
     const at = (z) => { const v = mat4.mulVec4(inv, [nx, ny, z, 1]); return [v[0] / v[3], v[1] / v[3], v[2] / v[3]]; };
     const a = at(-1), d = vec3.sub(at(1), a);            // ray a + t d (object space)
     const A = vec3.dot(d, d), B = 2 * vec3.dot(a, d), C = vec3.dot(a, a) - 1;

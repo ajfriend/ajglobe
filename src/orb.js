@@ -1108,7 +1108,7 @@ export class Orb {
       gl.useProgram(this.strokeProg);
       gl.uniformMatrix4fv(this.strokeU.mvp, false, mvp);
       gl.uniform2f(this.strokeU.viewport, w, h);
-      gl.uniform1f(this.strokeU.pxPerRad, this.cam.pxPerRad(h));
+      gl.uniform1f(this.strokeU.pxPerRad, this.cam.pxPerRad(h, w / h));
       gl.depthMask(false);
       for (const l of this.lineLayers) {
         gl.uniform4f(this.strokeU.color, l.color[0], l.color[1], l.color[2], l.color[3]);
